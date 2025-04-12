@@ -9,7 +9,7 @@ A simple, clean notes-sharing website for KTU CS students. Made this to help out
 
 ## Tech used
 - Plain HTML/CSS/JS - keeping it simple
-- Firebase for the backend 
+- Firebase , Gemini for the backend 
 - No frameworks, no bloat
 - Used Claude to generate Comments
 
