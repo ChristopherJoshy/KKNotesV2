@@ -12,6 +12,7 @@ A simple, clean notes-sharing website for KTU CS students. Made this to help out
 - Firebase for the backend 
 - No frameworks, no bloat
 - Used Claude to generate Comments
+--
 Set this up for our CS department at SJCET. Feel free to fork it if you want to make something similar for your class!
 
 Made by [Christopher Joshy](https://github.com/ChristopherJoshy)
