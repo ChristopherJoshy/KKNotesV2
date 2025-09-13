@@ -1,0 +1,62 @@
+{
+  "name": "KKNotes V2",
+  "short_name": "KKNotes",
+  "description": "Student notes portal for accessing course materials by semester and subject",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E8F0E8",
+  "theme_color": "#4A90E2",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512x512.png", 
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "productivity"],
+  "screenshots": [
+    {
+      "src": "/screenshot1.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Browse Notes",
+      "short_name": "Notes",
+      "description": "Browse notes by semester and subject",
+      "url": "/",
+      "icons": [
+        {
+          "src": "/icon-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Admin Panel",
+      "short_name": "Admin", 
+      "description": "Access admin panel for managing notes",
+      "url": "/admin",
+      "icons": [
+        {
+          "src": "/icon-192x192.png",
+          "sizes": "192x192", 
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}
