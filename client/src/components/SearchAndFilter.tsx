@@ -36,8 +36,6 @@ const SEMESTER_OPTIONS = [
   { value: "s8", label: "Semester 8" },
 ];
 
-// Date range filter removed per requirements
-
 const SORT_OPTIONS = [
   { value: "relevance", label: "Relevance" },
   { value: "date", label: "Date Added" },
@@ -84,31 +82,35 @@ export function SearchAndFilter({
   /**
    * Handle search input with debouncing
    */
-  const handleSearchChange = React.useCallback(
-    React.useMemo(
-      () => {
-        let timeoutId: NodeJS.Timeout;
-        return (value: string) => {
-          clearTimeout(timeoutId);
-          timeoutId = setTimeout(() => {
-            updateFilter('query', value);
-          }, 300);
-        };
-      },
-      [filters]
-    ),
-    [filters]
-  );
+  const debounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  
+  const handleSearchChange = React.useCallback((value: string) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      updateFilter('query', value);
+    }, 300);
+  }, []);
+  
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const hasActiveFilters = getActiveFilterCount() > 0;
 
   return (
-    <Card className="mb-6 shadow-sm">
-      <CardContent className="pt-6">
+    <Card className="shadow-sm border-border">
+      <CardContent className="p-4 sm:p-6">
         {/* Search Input */}
         <div className="relative mb-4">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <i className="fas fa-search text-muted-foreground"></i>
+            <i className="fas fa-search text-muted-foreground text-sm"></i>
           </div>
           <Input
             data-testid="input-search-query"
@@ -116,24 +118,25 @@ export function SearchAndFilter({
             placeholder="Search notes and videos..."
             defaultValue={filters.query}
             onChange={(e) => handleSearchChange(e.target.value)}
-            className="pl-10 pr-4 h-12 text-base"
+            className="pl-9 sm:pl-10 pr-4 h-10 sm:h-12 text-sm sm:text-base"
           />
           {isSearching && (
             <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+              <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
             </div>
           )}
         </div>
 
         {/* Quick Filter Buttons */}
-  <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-4">
           <Button
             data-testid="button-filter-notes"
             onClick={() => updateFilter('contentType', filters.contentType === 'notes' ? 'all' : 'notes')}
             variant={filters.contentType === 'notes' ? "default" : "outline"}
             size="sm"
+            className="h-8 sm:h-9 text-xs sm:text-sm gap-1.5"
           >
-            <i className="fas fa-file-pdf mr-2"></i>
+            <i className="fas fa-file-pdf"></i>
             Notes
           </Button>
           <Button
@@ -141,25 +144,26 @@ export function SearchAndFilter({
             onClick={() => updateFilter('contentType', filters.contentType === 'videos' ? 'all' : 'videos')}
             variant={filters.contentType === 'videos' ? "default" : "outline"}
             size="sm"
+            className="h-8 sm:h-9 text-xs sm:text-sm gap-1.5"
           >
-            <i className="fas fa-play-circle mr-2"></i>
+            <i className="fas fa-play-circle"></i>
             Videos
           </Button>
         </div>
 
         {/* Advanced Filters Toggle */}
         <Collapsible open={isFiltersOpen} onOpenChange={setIsFiltersOpen}>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CollapsibleTrigger asChild>
-              <Button data-testid="button-toggle-filters" variant="ghost" size="sm">
-                <i className="fas fa-filter mr-2"></i>
-                Advanced Filters
+              <Button data-testid="button-toggle-filters" variant="ghost" size="sm" className="h-8 text-xs sm:text-sm px-2 sm:px-3">
+                <i className="fas fa-filter mr-1.5"></i>
+                <span className="hidden xs:inline">Advanced </span>Filters
                 {hasActiveFilters && (
-                  <Badge variant="secondary" className="ml-2">
+                  <Badge variant="secondary" className="ml-1.5 h-5 min-w-5 flex items-center justify-center text-[10px]">
                     {getActiveFilterCount()}
                   </Badge>
                 )}
-                <i className={`fas fa-chevron-${isFiltersOpen ? 'up' : 'down'} ml-2`}></i>
+                <i className={`fas fa-chevron-${isFiltersOpen ? 'up' : 'down'} ml-1.5 text-xs`}></i>
               </Button>
             </CollapsibleTrigger>
             
@@ -169,19 +173,20 @@ export function SearchAndFilter({
                 onClick={onClearFilters}
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs sm:text-sm"
               >
                 Clear All
               </Button>
             )}
           </div>
 
-          <CollapsibleContent className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <CollapsibleContent className="space-y-3 sm:space-y-4 mt-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               {/* Semester Filter */}
               <div>
-                <label className="block text-sm font-medium mb-2">Semester</label>
+                <label className="block text-xs sm:text-sm font-medium mb-1.5">Semester</label>
                 <Select value={filters.semester} onValueChange={(value) => updateFilter('semester', value)}>
-                  <SelectTrigger data-testid="select-filter-semester">
+                  <SelectTrigger data-testid="select-filter-semester" className="h-9 sm:h-10 text-sm">
                     <SelectValue placeholder="Select semester" />
                   </SelectTrigger>
                   <SelectContent>
@@ -196,9 +201,9 @@ export function SearchAndFilter({
 
               {/* Subject Filter */}
               <div>
-                <label className="block text-sm font-medium mb-2">Subject</label>
+                <label className="block text-xs sm:text-sm font-medium mb-1.5">Subject</label>
                 <Select value={filters.subject} onValueChange={(value) => updateFilter('subject', value)}>
-                  <SelectTrigger data-testid="select-filter-subject">
+                  <SelectTrigger data-testid="select-filter-subject" className="h-9 sm:h-10 text-sm">
                     <SelectValue placeholder="Select subject" />
                   </SelectTrigger>
                   <SelectContent>
@@ -212,14 +217,12 @@ export function SearchAndFilter({
                 </Select>
               </div>
 
-              {/* Date Range filter removed */}
-
               {/* Sort Options */}
-              <div>
-                <label className="block text-sm font-medium mb-2">Sort By</label>
-                <div className="flex space-x-2">
-                  <Select value={filters.sortBy} onValueChange={(value: any) => updateFilter('sortBy', value)} >
-                    <SelectTrigger data-testid="select-sort-by" className="flex-1">
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block text-xs sm:text-sm font-medium mb-1.5">Sort By</label>
+                <div className="flex gap-2">
+                  <Select value={filters.sortBy} onValueChange={(value: any) => updateFilter('sortBy', value)}>
+                    <SelectTrigger data-testid="select-sort-by" className="flex-1 h-9 sm:h-10 text-sm">
                       <SelectValue placeholder="Sort by" />
                     </SelectTrigger>
                     <SelectContent>
@@ -235,6 +238,7 @@ export function SearchAndFilter({
                     onClick={() => updateFilter('sortOrder', filters.sortOrder === 'asc' ? 'desc' : 'asc')}
                     variant="outline"
                     size="sm"
+                    className="h-9 sm:h-10 w-9 sm:w-10 p-0"
                   >
                     <i className={`fas fa-sort-${filters.sortOrder === 'asc' ? 'up' : 'down'}`}></i>
                   </Button>
@@ -247,12 +251,12 @@ export function SearchAndFilter({
         {/* Results Summary */}
         {hasActiveFilters && (
           <div className="mt-4 pt-4 border-t">
-            <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-muted-foreground">
               <span data-testid="text-results-count">
                 {isSearching ? "Searching..." : `${resultsCount} result${resultsCount !== 1 ? 's' : ''} found`}
               </span>
               {filters.query && (
-                <span>
+                <span className="truncate max-w-[200px]">
                   for "{filters.query}"
                 </span>
               )}

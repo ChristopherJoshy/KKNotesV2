@@ -39,29 +39,30 @@ export function SemesterDropdown({ selectedSemester, onSemesterSelect }: Semeste
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <label className="block text-sm font-medium text-card-foreground mb-2">Semester</label>
+      <label className="block text-xs sm:text-sm font-medium text-card-foreground mb-1.5 sm:mb-2">Semester</label>
       <Button
         data-testid="dropdown-semester"
         onClick={() => setIsOpen(!isOpen)}
         variant="outline"
-        className="w-full justify-between bg-input border-border hover:bg-input/80 text-left"
+        className="w-full justify-between bg-input border-border hover:bg-input/80 text-left h-10 sm:h-11 text-sm"
       >
         <span data-testid="text-semester-selected" className={cn(
+          "truncate",
           selectedOption ? "text-foreground" : "text-muted-foreground"
         )}>
           {selectedOption ? selectedOption.label : "Select Semester"}
         </span>
         <i className={cn(
-          "fas fa-chevron-down text-muted-foreground transition-transform duration-200",
+          "fas fa-chevron-down text-muted-foreground text-xs ml-2 shrink-0",
           isOpen && "rotate-180"
         )}></i>
       </Button>
       
       <div className={cn(
-        "absolute top-full left-0 right-0 bg-popover border border-border rounded-lg mt-1 shadow-lg z-50 transition-all duration-200 transform-gpu",
-        isOpen ? "opacity-100 scale-y-100 visible" : "opacity-0 scale-y-0 invisible"
+        "absolute top-full left-0 right-0 bg-popover border border-border rounded-lg mt-1 shadow-lg z-50",
+        isOpen ? "opacity-100 visible" : "opacity-0 invisible pointer-events-none"
       )}>
-        <div className="py-2">
+        <div className="py-1 sm:py-2 max-h-[280px] overflow-y-auto scrollbar-thin">
           {SEMESTER_OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -70,11 +71,14 @@ export function SemesterDropdown({ selectedSemester, onSemesterSelect }: Semeste
                 onSemesterSelect(option.value);
                 setIsOpen(false);
               }}
-              className="w-full text-left px-4 py-2 hover:bg-accent hover:text-accent-foreground transition-colors"
+              className={cn(
+                "w-full text-left px-3 sm:px-4 py-2 sm:py-2.5 hover:bg-accent hover:text-accent-foreground",
+                selectedSemester === option.value && "bg-accent/50"
+              )}
             >
-              <div className="flex justify-between items-center">
-                <span>{option.label}</span>
-                <span className="text-xs text-muted-foreground">{option.year}</span>
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-sm font-medium">{option.label}</span>
+                <span className="text-[10px] sm:text-xs text-muted-foreground shrink-0">{option.year}</span>
               </div>
             </button>
           ))}

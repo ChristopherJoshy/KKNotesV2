@@ -2,6 +2,7 @@ import * as React from "react";
 import { Layout } from "@/components/Layout";
 import { SemesterDropdown } from "@/components/SemesterDropdown";
 import { SubjectDropdown } from "@/components/SubjectDropdown";
+import { SchemeDropdown } from "@/components/SchemeDropdown";
 import { ContentGrid } from "@/components/ContentGrid";
 import { EnhancedAdminPanel } from "@/components/EnhancedAdminPanel";
 import { SearchAndFilter, SearchFilters } from "@/components/SearchAndFilter";
@@ -16,6 +17,7 @@ import { Subject, ContentItem } from "@shared/schema";
 
 export default function Home() {
   const { isAdmin } = useAuth();
+  const [selectedScheme, setSelectedScheme] = React.useState<string>("2019");
   const [selectedSemester, setSelectedSemester] = React.useState<string | null>(null);
   const [selectedSubjectId, setSelectedSubjectId] = React.useState<string | null>(null);
   const [subjects, setSubjects] = React.useState<Record<string, Subject>>({});
@@ -38,10 +40,40 @@ export default function Home() {
   const [allSubjects, setAllSubjects] = React.useState<Record<string, { name: string; semester: string }>>({});
 
   React.useEffect(() => {
-    // Initialize Firebase subjects and load all subjects for search
-    firebaseService.initializeSubjects();
-    loadAllSubjectsForSearch();
+    // Load current scheme and initialize
+    const initializeApp = async () => {
+      try {
+        const currentScheme = await firebaseService.getCurrentScheme();
+        setSelectedScheme(currentScheme);
+      } catch (error) {
+        console.error('Error loading current scheme:', error);
+      }
+      // Initialize Firebase subjects and load all subjects for search
+      firebaseService.initializeSubjects();
+      loadAllSubjectsForSearch();
+    };
+    
+    initializeApp();
   }, []);
+
+  /**
+   * Handle scheme selection change
+   */
+  const handleSchemeChange = async (scheme: string) => {
+    setSelectedScheme(scheme);
+    // Reset selections when scheme changes
+    setSelectedSemester(null);
+    setSelectedSubjectId(null);
+    setSubjects({});
+    // Save scheme preference
+    try {
+      await firebaseService.setCurrentScheme(scheme);
+    } catch (error) {
+      console.error('Error setting current scheme:', error);
+    }
+    // Reload subjects for search with new scheme
+    loadAllSubjectsForSearch();
+  };
 
   /**
    * Load all subjects across all semesters for search filtering
@@ -159,32 +191,32 @@ export default function Home() {
       <LoadingOverlay visible={loading} />
       
       {!showAdminPanel ? (
-        <>
-          {/* Header Section */}
-          <div className="text-center mb-12">
-            <h1 className="text-4xl font-bold text-foreground mb-4">
-              Welcome to KKNotes V2
+        <div className="space-y-6 sm:space-y-8">
+          {/* Hero Section */}
+          <div className="text-center py-4 sm:py-8">
+            <h1 className="text-responsive-2xl font-bold text-foreground mb-2 sm:mb-4">
+              Welcome to KKNotes
             </h1>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Search and browse course materials with advanced filtering. Access notes and videos organized by semester and subject.
+            <p className="text-responsive-base text-muted-foreground max-w-2xl mx-auto px-4">
+              Access course materials, notes, and videos organized by semester and subject.
             </p>
           </div>
 
           {/* Main Content Tabs */}
           <Tabs value={currentView} onValueChange={handleTabChange} className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="search" className="flex items-center">
-                <i className="fas fa-search mr-2"></i>
-                Search & Filter
+            <TabsList className="grid w-full grid-cols-2 h-10 sm:h-11">
+              <TabsTrigger value="search" className="text-xs sm:text-sm gap-1.5 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                <i className="fas fa-search text-xs"></i>
+                <span>Search</span>
               </TabsTrigger>
-              <TabsTrigger value="browse" className="flex items-center">
-                <i className="fas fa-folder mr-2"></i>
-                Browse by Subject
+              <TabsTrigger value="browse" className="text-xs sm:text-sm gap-1.5 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                <i className="fas fa-folder text-xs"></i>
+                <span>Browse</span>
               </TabsTrigger>
             </TabsList>
 
             {/* Search Tab Content */}
-            <TabsContent value="search" className="space-y-6">
+            <TabsContent value="search" className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
               <SearchAndFilter
                 filters={searchFilters}
                 onFiltersChange={handleSearchFiltersChange}
@@ -202,13 +234,20 @@ export default function Home() {
             </TabsContent>
 
             {/* Browse Tab Content */}
-            <TabsContent value="browse" className="space-y-6">
+            <TabsContent value="browse" className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
               {/* Navigation Section */}
-              <Card className="shadow-sm">
-                <CardContent className="pt-6">
-                  <h3 className="text-xl font-semibold text-card-foreground mb-6">Select Your Course</h3>
+              <Card className="shadow-sm border-border">
+                <CardContent className="p-4 sm:p-6">
+                  <h3 className="text-base sm:text-lg font-semibold text-card-foreground mb-4 sm:mb-6">
+                    Select Your Course
+                  </h3>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 sm:gap-6">
+                    <SchemeDropdown
+                      selectedScheme={selectedScheme}
+                      onSchemeSelect={handleSchemeChange}
+                    />
+                    
                     <SemesterDropdown
                       selectedSemester={selectedSemester}
                       onSemesterSelect={handleSemesterSelect}
@@ -222,14 +261,16 @@ export default function Home() {
                     />
 
                     <div>
-                      <label className="block text-sm font-medium text-card-foreground mb-2">Category</label>
-                      <div className="flex space-x-2">
+                      <label className="block text-xs sm:text-sm font-medium text-card-foreground mb-1.5 sm:mb-2">
+                        Category
+                      </label>
+                      <div className="flex gap-1.5 sm:gap-2">
                         <Button
                           data-testid="button-category-all"
                           onClick={() => setSelectedCategory("all")}
                           variant={selectedCategory === "all" ? "default" : "outline"}
                           size="sm"
-                          className="flex-1"
+                          className="flex-1 text-xs sm:text-sm h-9 sm:h-10"
                         >
                           All
                         </Button>
@@ -238,20 +279,20 @@ export default function Home() {
                           onClick={() => setSelectedCategory("notes")}
                           variant={selectedCategory === "notes" ? "default" : "outline"}
                           size="sm"
-                          className="flex-1"
+                          className="flex-1 text-xs sm:text-sm h-9 sm:h-10 gap-1"
                         >
-                          <i className="fas fa-file-pdf mr-1"></i>
-                          Notes
+                          <i className="fas fa-file-pdf text-xs"></i>
+                          <span className="hidden xs:inline">Notes</span>
                         </Button>
                         <Button
                           data-testid="button-category-videos"
                           onClick={() => setSelectedCategory("videos")}
                           variant={selectedCategory === "videos" ? "default" : "outline"}
                           size="sm"
-                          className="flex-1"
+                          className="flex-1 text-xs sm:text-sm h-9 sm:h-10 gap-1"
                         >
-                          <i className="fas fa-play-circle mr-1"></i>
-                          Videos
+                          <i className="fas fa-play-circle text-xs"></i>
+                          <span className="hidden xs:inline">Videos</span>
                         </Button>
                       </div>
                     </div>
@@ -268,9 +309,42 @@ export default function Home() {
                   selectedCategory={selectedCategory}
                 />
               )}
+              
+              {/* Empty state when no selection */}
+              {!selectedSemester && (
+                <Card className="text-center py-8 sm:py-12 border-dashed">
+                  <CardContent>
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-muted rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                      <i className="fas fa-book-open text-muted-foreground text-xl sm:text-2xl"></i>
+                    </div>
+                    <h4 className="text-base sm:text-lg font-semibold text-foreground mb-2">
+                      Select a Semester
+                    </h4>
+                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                      Choose a semester above to view available subjects and course materials.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+              
+              {selectedSemester && !selectedSubjectId && (
+                <Card className="text-center py-8 sm:py-12 border-dashed">
+                  <CardContent>
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-muted rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                      <i className="fas fa-list text-muted-foreground text-xl sm:text-2xl"></i>
+                    </div>
+                    <h4 className="text-base sm:text-lg font-semibold text-foreground mb-2">
+                      Select a Subject
+                    </h4>
+                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                      Choose a subject to browse notes and video resources.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
           </Tabs>
-        </>
+        </div>
       ) : (
         <EnhancedAdminPanel onClose={toggleAdminPanel} />
       )}

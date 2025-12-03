@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kknotes-v2-cache-v2-devsafe';
+const CACHE_NAME = 'kknotes-v2-cache-v3';
 const urlsToCache = [
   '/',
   '/src/main.tsx',
@@ -57,45 +57,121 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Push notification event
-self.addEventListener('push', (event) => {
-  const options = {
-    body: event.data ? event.data.text() : 'New notes available!',
+// Notification type styles for rich notifications
+const NOTIFICATION_STYLES = {
+  submission_pending: {
+    title: '⏳ Submission Pending',
     icon: '/icon-192x192.png',
-    badge: '/icon-192x192.png',
-    vibrate: [100, 50, 100],
+    badge: '/badge-72x72.png'
+  },
+  submission_approved: {
+    title: '✅ Submission Approved!',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  submission_rejected: {
+    title: '❌ Submission Rejected',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  content_rated: {
+    title: '⭐ New Rating!',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  content_reported: {
+    title: '⚠️ Content Report',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  pending_approval: {
+    title: '📋 New Approval Request',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  default: {
+    title: '🔔 KKNotes Update',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  }
+};
+
+// Push notification event with rich styling
+self.addEventListener('push', (event) => {
+  let data = { type: 'default', message: 'New update available!', url: '/' };
+  
+  try {
+    if (event.data) {
+      data = { ...data, ...event.data.json() };
+    }
+  } catch (e) {
+    data.message = event.data ? event.data.text() : 'New notes available!';
+  }
+
+  const style = NOTIFICATION_STYLES[data.type] || NOTIFICATION_STYLES.default;
+  
+  const options = {
+    body: data.message,
+    icon: style.icon,
+    badge: style.badge,
+    vibrate: [100, 50, 100, 50, 100],
+    tag: data.type + '-' + Date.now(),
+    renotify: true,
+    requireInteraction: data.type === 'pending_approval',
+    silent: false,
     data: {
-      dateOfArrival: Date.now(),
-      primaryKey: 1
+      url: data.url || '/',
+      type: data.type,
+      dateOfArrival: Date.now()
     },
     actions: [
       {
-        action: 'explore',
-        title: 'View Notes',
-        icon: '/icon-192x192.png'
+        action: 'view',
+        title: '👀 View',
       },
       {
-        action: 'close',
-        title: 'Close',
-        icon: '/icon-192x192.png'
+        action: 'dismiss',
+        title: '✕ Dismiss',
       }
     ]
   };
 
   event.waitUntil(
-    self.registration.showNotification('KKNotes V2', options)
+    self.registration.showNotification(style.title, options)
   );
 });
 
-// Notification click event
+// Notification click event with smart navigation
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  if (event.action === 'explore') {
-    event.waitUntil(
-      clients.openWindow('/')
-    );
+  const url = event.notification.data?.url || '/';
+
+  if (event.action === 'dismiss') {
+    return;
   }
+
+  // Open or focus the app
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        // Check if there's already a window open
+        for (const client of clientList) {
+          if (client.url.includes(self.registration.scope) && 'focus' in client) {
+            client.focus();
+            // Navigate to the specific URL if needed
+            if (url !== '/') {
+              client.navigate(url);
+            }
+            return;
+          }
+        }
+        // If no window is open, open a new one
+        if (clients.openWindow) {
+          return clients.openWindow(url);
+        }
+      })
+  );
 });
 
 // Background sync for offline note uploads

@@ -10,6 +10,10 @@ import Home from "@/pages/Home";
 import Admin from "@/pages/Admin";
 import NotFound from "@/pages/not-found";
 
+// Lazy load the notification components to avoid blocking initial render
+const NotificationPermissionPrompt = React.lazy(() => import("@/components/NotificationPermissionPrompt"));
+const PWAInstallPrompt = React.lazy(() => import("@/components/PWAInstallPrompt"));
+
 /**
  * Application router component using wouter for lightweight routing
  * Handles main application routes and fallback to 404 page
@@ -35,6 +39,10 @@ function App() {
         <AuthProvider>
           <TooltipProvider>
             <Toaster />
+            <React.Suspense fallback={null}>
+              <NotificationPermissionPrompt />
+              <PWAInstallPrompt />
+            </React.Suspense>
             <Router />
           </TooltipProvider>
         </AuthProvider>

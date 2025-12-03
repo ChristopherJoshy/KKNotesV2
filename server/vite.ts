@@ -33,7 +33,10 @@ export async function setupVite(app: Express, server: Server) {
       ...viteLogger,
       error: (msg, options) => {
         viteLogger.error(msg, options);
-        process.exit(1);
+        // Don't exit on pre-transform errors (like JSON parse issues)
+        if (!msg.includes("Pre-transform error")) {
+          process.exit(1);
+        }
       },
     },
     server: serverOptions,

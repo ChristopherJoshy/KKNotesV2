@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- Gradient for the main background -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B7355"/>
+      <stop offset="50%" style="stop-color:#6B5344"/>
+      <stop offset="100%" style="stop-color:#5D4E37"/>
+    </linearGradient>
+    
+    <!-- Accent gradient -->
+    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4A574"/>
+      <stop offset="100%" style="stop-color:#C49B6A"/>
+    </linearGradient>
+    
+    <!-- Shine effect -->
+    <linearGradient id="shine" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.3"/>
+      <stop offset="50%" style="stop-color:#ffffff;stop-opacity:0.1"/>
+      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background rounded square -->
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="url(#bgGradient)"/>
+  
+  <!-- Subtle inner shadow/shine -->
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="url(#shine)"/>
+  
+  <!-- Stylized "KK" as stacked notes/pages -->
+  <!-- First K (back page) -->
+  <g transform="translate(100, 80)">
+    <!-- Back page shadow -->
+    <path d="M 20 40 L 20 320 L 180 320 L 180 40 Z" fill="#4A3F2F" opacity="0.5"/>
+    
+    <!-- Back page -->
+    <path d="M 10 30 L 10 310 L 170 310 L 170 30 Z" fill="#E8DDD0"/>
+    
+    <!-- Page lines -->
+    <line x1="30" y1="70" x2="150" y2="70" stroke="#C4B8A8" stroke-width="4"/>
+    <line x1="30" y1="110" x2="150" y2="110" stroke="#C4B8A8" stroke-width="4"/>
+    <line x1="30" y1="150" x2="120" y2="150" stroke="#C4B8A8" stroke-width="4"/>
+  </g>
+  
+  <!-- Front page with K symbol -->
+  <g transform="translate(140, 110)">
+    <!-- Front page shadow -->
+    <path d="M 25 35 L 25 290 L 210 290 L 210 35 Z" fill="#4A3F2F" opacity="0.4"/>
+    
+    <!-- Front page -->
+    <path d="M 15 25 L 15 280 L 200 280 L 200 25 Z" fill="#FFF8F0"/>
+    
+    <!-- Folded corner -->
+    <path d="M 160 25 L 200 25 L 200 65 Z" fill="#E8DDD0"/>
+    <path d="M 160 25 L 160 65 L 200 65 Z" fill="#D4C8B8"/>
+  </g>
+  
+  <!-- Bold "K" letter on the front page -->
+  <g transform="translate(180, 145)">
+    <text x="0" y="180" font-family="Arial Black, Arial, sans-serif" font-size="200" font-weight="900" fill="url(#bgGradient)">K</text>
+  </g>
+  
+  <!-- Small "notes" text or decorative element -->
+  <g transform="translate(256, 420)">
+    <text x="0" y="0" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="url(#accentGradient)" text-anchor="middle">NOTES</text>
+  </g>
+  
+  <!-- Decorative graduation cap hint at top -->
+  <g transform="translate(380, 70)">
+    <polygon points="0,30 50,10 100,30 50,50" fill="url(#accentGradient)"/>
+    <rect x="40" y="30" width="20" height="25" fill="url(#accentGradient)"/>
+    <line x1="85" y1="30" x2="95" y2="55" stroke="url(#accentGradient)" stroke-width="4"/>
+    <circle cx="95" cy="60" r="8" fill="url(#accentGradient)"/>
+  </g>
+</svg>

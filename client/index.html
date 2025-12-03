@@ -7,15 +7,15 @@
     <meta name="description" content="Access and download course materials organized by semester and subject. KKNotes V2 - Your comprehensive student notes platform.">
     
     <!-- PWA Meta Tags -->
-    <meta name="theme-color" content="#4A90E2">
+    <meta name="theme-color" content="#8B7355">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="KKNotes V2">
     
-    <!-- PWA Icons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/icon-192x192.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/icon-192x192.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/icon-192x192.png">
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="icon" type="image/svg+xml" sizes="32x32" href="/favicon-32.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon-192x192.svg">
     <link rel="manifest" href="/manifest.json">
     
     <!-- Fonts -->
@@ -28,36 +28,39 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     
-    <!-- PWA Service Worker Registration (only in production) -->
+    <!-- PWA Service Worker Registration -->
     <script type="module">
-      if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-              console.log('SW registered: ', registration);
-            })
-            .catch((registrationError) => {
-              console.log('SW registration failed: ', registrationError);
+      // Only register service worker in production
+      const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      
+      if ('serviceWorker' in navigator) {
+        if (isDev) {
+          // In development, unregister any existing service workers and clear caches
+          navigator.serviceWorker.getRegistrations().then((registrations) => {
+            registrations.forEach((registration) => {
+              registration.unregister();
             });
-        });
-      }
-
-      if (import.meta.env.DEV && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then((regs) => {
-          const had = regs.length > 0;
-          regs.forEach((reg) => reg.unregister());
-          if (had) {
-            console.log('SW unregistered for development');
-            // Proactively clear caches then reload app
-            if (window.caches && caches.keys) {
-              caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
-                window.location.replace('/unregister.html');
+          });
+          // Clear caches
+          if (window.caches) {
+            caches.keys().then((names) => {
+              names.forEach((name) => {
+                caches.delete(name);
               });
-            } else {
-              window.location.replace('/unregister.html');
-            }
+            });
           }
-        });
+        } else {
+          // In production, register service worker
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js')
+              .then((registration) => {
+                console.log('SW registered: ', registration);
+              })
+              .catch((registrationError) => {
+                console.log('SW registration failed: ', registrationError);
+              });
+          });
+        }
       }
     </script>
   </body>

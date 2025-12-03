@@ -7,8 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { firebaseService } from "@/lib/firebaseAdmin";
-import { InsertNote, InsertVideo, Note, Video, User, ContentItem } from "@shared/schema";
+import { InsertNote, InsertVideo, Note, Video, User, ContentItem, PendingSubmission, Report, REPORT_REASON_LABELS } from "@shared/schema";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -59,14 +60,151 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   });
   const [manageSemester, setManageSemester] = useState<string>('all');
   const [manageSubjectId, setManageSubjectId] = useState<string>('all');
+  const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+  const [processingSubmission, setProcessingSubmission] = useState<string | null>(null);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [loadingReports, setLoadingReports] = useState(false);
+  const [processingReport, setProcessingReport] = useState<string | null>(null);
+  const [reportFilter, setReportFilter] = useState<'all' | 'pending' | 'reviewed' | 'resolved' | 'dismissed'>('pending');
 
   useEffect(() => {
     loadAllContent();
+    loadPendingSubmissions();
+    loadReports();
     if (isSuperAdmin) {
       loadAllUsers();
   loadAdmins();
     }
   }, [isSuperAdmin]);
+
+  const loadReports = async () => {
+    setLoadingReports(true);
+    try {
+      const allReports = await firebaseService.getReports();
+      setReports(allReports);
+    } catch (error) {
+      console.error('Error loading reports:', error);
+    } finally {
+      setLoadingReports(false);
+    }
+  };
+
+  const handleUpdateReportStatus = async (reportId: string, status: 'reviewed' | 'resolved' | 'dismissed') => {
+    setProcessingReport(reportId);
+    try {
+      await firebaseService.updateReportStatus(reportId, status, undefined, user?.uid, user?.name || user?.email);
+      toast({
+        title: "Report Updated",
+        description: `Report status changed to ${status}.`,
+      });
+      await loadReports();
+    } catch (error) {
+      console.error('Error updating report:', error);
+      toast({
+        title: "Update Failed",
+        description: "Could not update the report status. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setProcessingReport(null);
+    }
+  };
+
+  const handleDeleteReportedContent = async (report: Report) => {
+    setProcessingReport(report.id);
+    try {
+      // Delete the content
+      if (report.contentType === 'notes') {
+        await firebaseService.deleteNote(report.contentId, report.semester, report.subjectId);
+      } else {
+        await firebaseService.deleteVideo(report.contentId, report.semester, report.subjectId);
+      }
+      
+      // Update report status to resolved
+      await firebaseService.updateReportStatus(report.id, 'resolved', 'Content was deleted.', user?.uid, user?.name || user?.email);
+      
+      toast({
+        title: "Content Deleted",
+        description: "The reported content has been removed.",
+      });
+      
+      await loadReports();
+      await loadAllContent();
+    } catch (error) {
+      console.error('Error deleting reported content:', error);
+      toast({
+        title: "Delete Failed",
+        description: "Could not delete the content. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setProcessingReport(null);
+    }
+  };
+
+  const loadPendingSubmissions = async () => {
+    setLoadingPending(true);
+    try {
+      const submissions = await firebaseService.getPendingSubmissions();
+      setPendingSubmissions(submissions);
+      
+      // Load subjects for all semesters that have pending submissions
+      const uniqueSemesters = Array.from(new Set(submissions.map(s => s.semester)));
+      await Promise.all(uniqueSemesters.map(sem => ensureSubjects(sem)));
+    } catch (error) {
+      console.error('Error loading pending submissions:', error);
+    } finally {
+      setLoadingPending(false);
+    }
+  };
+
+  const handleApproveSubmission = async (submissionId: string) => {
+    setProcessingSubmission(submissionId);
+    try {
+      // The firebaseService now handles all notifications internally
+      await firebaseService.approvePendingSubmission(submissionId, user?.uid, user?.name || user?.email);
+      
+      toast({
+        title: "Approved",
+        description: "Submission has been approved and published.",
+      });
+      await loadPendingSubmissions();
+      await loadAllContent();
+    } catch (error) {
+      console.error('Error approving submission:', error);
+      toast({
+        title: "Approval Failed",
+        description: "Could not approve the submission. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setProcessingSubmission(null);
+    }
+  };
+
+  const handleRejectSubmission = async (submissionId: string) => {
+    setProcessingSubmission(submissionId);
+    try {
+      // The firebaseService now handles all notifications internally
+      await firebaseService.rejectPendingSubmission(submissionId, user?.uid, user?.name || user?.email);
+      
+      toast({
+        title: "Rejected",
+        description: "Submission has been rejected and removed.",
+      });
+      await loadPendingSubmissions();
+    } catch (error) {
+      console.error('Error rejecting submission:', error);
+      toast({
+        title: "Rejection Failed",
+        description: "Could not reject the submission. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setProcessingSubmission(null);
+    }
+  };
 
   const loadAllContent = async () => {
     setLoadingContent(true);
@@ -288,7 +426,11 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
     }
     setAddingAdmin(true);
     try {
-      await firebaseService.addAdmin({ email, addedBy: user?.email || undefined });
+      await firebaseService.addAdmin({ 
+        email, 
+        addedBy: user?.uid || undefined,
+        addedByName: user?.name || user?.email || undefined 
+      });
       toast({ title: 'Admin added', description: email });
       setNewAdminEmail("");
       await loadAdmins();
@@ -302,7 +444,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   const handleRemoveAdmin = async (adminKey: string) => {
     setRemovingAdminKey(adminKey);
     try {
-      await firebaseService.removeAdminByKey(adminKey);
+      await firebaseService.removeAdminByKey(adminKey, user?.uid, user?.name || user?.email);
       toast({ title: 'Admin removed' });
       await loadAdmins();
     } catch (e: any) {
@@ -328,52 +470,112 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   const totalViews = content.filter(item => item.category === "videos").reduce((sum, video) => sum + ((video as Video).views || 0), 0);
 
   return (
-    <div className="mt-12 fade-in">
-      <Card className="shadow-sm">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-2xl font-bold">Enhanced Admin Panel</CardTitle>
-            <div className="flex items-center space-x-2">
-              <Badge variant={isSuperAdmin ? "default" : "secondary"}>
+    <div className="fade-in">
+      <Card className="shadow-sm border-border">
+        <CardHeader className="p-4 sm:p-6 border-b">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center shrink-0">
+                <i className="fas fa-cog text-primary"></i>
+              </div>
+              <div>
+                <CardTitle className="text-lg sm:text-xl font-bold">Admin Panel</CardTitle>
+                <p className="text-xs sm:text-sm text-muted-foreground">Manage content and users</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={isSuperAdmin ? "default" : "secondary"} className="text-xs">
                 {isSuperAdmin ? "Super Admin" : "Admin"}
               </Badge>
-              <Button data-testid="button-close-admin" onClick={onClose} variant="secondary">
-                Back to Portal
+              <Button data-testid="button-close-admin" onClick={onClose} variant="outline" size="sm">
+                <i className="fas fa-arrow-left mr-1.5"></i>
+                <span className="hidden sm:inline">Back</span>
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           <Tabs defaultValue="upload" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="upload">Upload Content</TabsTrigger>
-              <TabsTrigger value="manage">Manage Content</TabsTrigger>
-              <TabsTrigger value="statistics">Statistics</TabsTrigger>
-              {isSuperAdmin && <TabsTrigger value="users">User Management</TabsTrigger>}
-            </TabsList>
+            <div className="border-b overflow-x-auto scrollbar-hide">
+              <TabsList className="w-full sm:w-auto inline-flex h-11 sm:h-12 bg-transparent p-0 rounded-none">
+                <TabsTrigger 
+                  value="upload" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  <i className="fas fa-upload mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Upload</span>
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="pending" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent relative"
+                >
+                  <i className="fas fa-clock mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Pending</span>
+                  {pendingSubmissions.length > 0 && (
+                    <Badge variant="destructive" className="ml-1.5 h-5 min-w-5 flex items-center justify-center text-[10px] absolute -top-1 -right-1 sm:static sm:ml-2">
+                      {pendingSubmissions.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="reports" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent relative"
+                >
+                  <i className="fas fa-flag mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Reports</span>
+                  {reports.filter(r => r.status === 'pending').length > 0 && (
+                    <Badge variant="destructive" className="ml-1.5 h-5 min-w-5 flex items-center justify-center text-[10px] absolute -top-1 -right-1 sm:static sm:ml-2">
+                      {reports.filter(r => r.status === 'pending').length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="manage" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  <i className="fas fa-edit mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Manage</span>
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="statistics" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  <i className="fas fa-chart-bar mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Stats</span>
+                </TabsTrigger>
+                {isSuperAdmin && (
+                  <TabsTrigger 
+                    value="users" 
+                    className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                  >
+                    <i className="fas fa-users mr-1.5 sm:mr-2"></i>
+                    <span className="hidden xs:inline">Users</span>
+                  </TabsTrigger>
+                )}
+              </TabsList>
+            </div>
 
             {/* Upload Content Tab */}
-            <TabsContent value="upload">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <Card className="bg-primary/5 border-primary/20">
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                        <i className="fas fa-upload text-primary"></i>
-                      </div>
-                      <span>Upload Content</span>
+            <TabsContent value="upload" className="p-4 sm:p-6 mt-0">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                {/* Upload Form */}
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <i className="fas fa-cloud-upload-alt text-primary"></i>
+                      Upload Content
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="p-4 pt-2 space-y-3 sm:space-y-4">
                     <div>
-                      <Label htmlFor="category">Content Type</Label>
+                      <Label className="text-xs sm:text-sm">Content Type</Label>
                       <Select 
                         value={uploadForm.category} 
                         onValueChange={(value: "notes" | "videos") => 
                           setUploadForm(prev => ({ ...prev, category: value }))
                         }
                       >
-                        <SelectTrigger data-testid="select-content-category">
+                        <SelectTrigger data-testid="select-content-category" className="mt-1.5">
                           <SelectValue placeholder="Select content type" />
                         </SelectTrigger>
                         <SelectContent>
@@ -383,11 +585,11 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                       </Select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <Label htmlFor="semester">Semester</Label>
+                        <Label className="text-xs sm:text-sm">Semester</Label>
                         <Select value={uploadForm.semester} onValueChange={handleSemesterChange}>
-                          <SelectTrigger data-testid="select-upload-semester">
+                          <SelectTrigger data-testid="select-upload-semester" className="mt-1.5">
                             <SelectValue placeholder="Select semester" />
                           </SelectTrigger>
                           <SelectContent>
@@ -401,13 +603,13 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                       </div>
                       
                       <div>
-                        <Label htmlFor="subject">Subject</Label>
+                        <Label className="text-xs sm:text-sm">Subject</Label>
                         <Select 
                           value={uploadForm.subjectId} 
                           onValueChange={(value) => setUploadForm(prev => ({ ...prev, subjectId: value }))}
                           disabled={!uploadForm.semester}
                         >
-                          <SelectTrigger data-testid="select-upload-subject">
+                          <SelectTrigger data-testid="select-upload-subject" className="mt-1.5">
                             <SelectValue placeholder="Select subject" />
                           </SelectTrigger>
                           <SelectContent>
@@ -422,36 +624,36 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                     </div>
 
                     <div>
-                      <Label htmlFor="title">Title</Label>
+                      <Label className="text-xs sm:text-sm">Title</Label>
                       <Input
                         data-testid="input-content-title"
-                        id="title"
                         value={uploadForm.title}
                         onChange={(e) => setUploadForm(prev => ({ ...prev, title: e.target.value }))}
                         placeholder={`Enter ${uploadForm.category} title`}
+                        className="mt-1.5"
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="description">Description (Optional)</Label>
+                      <Label className="text-xs sm:text-sm">Description (Optional)</Label>
                       <Textarea
                         data-testid="textarea-content-description"
-                        id="description"
                         value={uploadForm.description}
                         onChange={(e) => setUploadForm(prev => ({ ...prev, description: e.target.value }))}
                         placeholder="Brief description of the content"
-                        rows={3}
+                        rows={2}
+                        className="mt-1.5"
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="contentUrl">{uploadForm.category === 'notes' ? 'Note URL' : 'Video URL'}</Label>
+                      <Label className="text-xs sm:text-sm">{uploadForm.category === 'notes' ? 'Note URL' : 'Video URL'}</Label>
                       <Input
                         data-testid="input-content-url"
-                        id="contentUrl"
                         value={uploadForm.url}
                         onChange={(e) => setUploadForm(prev => ({ ...prev, url: e.target.value }))}
                         placeholder={uploadForm.category === 'notes' ? 'https://drive.google.com/...' : 'https://youtube.com/watch?v=...'}
+                        className="mt-1.5"
                       />
                     </div>
 
@@ -459,291 +661,688 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                       data-testid="button-upload-content"
                       onClick={handleUpload}
                       disabled={uploading}
-                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                      className="w-full mt-2"
                     >
                       {uploading ? (
                         <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground mr-2"></div>
+                          <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
                           Uploading...
                         </>
                       ) : (
-                        `Upload ${uploadForm.category === "notes" ? "Note" : "Video"}`
+                        <>
+                          <i className="fas fa-upload mr-2"></i>
+                          Upload {uploadForm.category === "notes" ? "Note" : "Video"}
+                        </>
                       )}
                     </Button>
                   </CardContent>
                 </Card>
 
                 {/* Quick Stats */}
-                <Card className="bg-chart-2/5 border-chart-2/20">
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-chart-2/10 rounded-lg flex items-center justify-center">
-                        <i className="fas fa-chart-bar text-chart-2"></i>
-                      </div>
-                      <span>Quick Statistics</span>
+                <Card className="border-chart-2/20 bg-chart-2/5">
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <i className="fas fa-chart-pie text-chart-2"></i>
+                      Quick Statistics
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="text-center p-4 bg-background/50 rounded-lg">
-                        <div className="text-2xl font-bold text-primary">
-                          {content.filter(item => item.category === "notes").length}
-                        </div>
-                        <div className="text-sm text-muted-foreground">Total Notes</div>
+                  <CardContent className="p-4 pt-2">
+                    {loadingContent ? (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                        Loading stats...
                       </div>
-                      <div className="text-center p-4 bg-background/50 rounded-lg">
-                        <div className="text-2xl font-bold text-red-600">
-                          {content.filter(item => item.category === "videos").length}
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                        <div className="stat-card">
+                          <div className="stat-value text-primary">
+                            {content.filter(item => item.category === "notes").length}
+                          </div>
+                          <div className="stat-label">Total Notes</div>
                         </div>
-                        <div className="text-sm text-muted-foreground">Total Videos</div>
-                      </div>
-                      <div className="text-center p-4 bg-background/50 rounded-lg">
-                        <div className="text-2xl font-bold text-blue-600">
-                          {totalDownloads}
+                        <div className="stat-card">
+                          <div className="stat-value text-red-600">
+                            {content.filter(item => item.category === "videos").length}
+                          </div>
+                          <div className="stat-label">Total Videos</div>
                         </div>
-                        <div className="text-sm text-muted-foreground">Total Downloads</div>
-                      </div>
-                      <div className="text-center p-4 bg-background/50 rounded-lg">
-                        <div className="text-2xl font-bold text-green-600">
-                          {totalViews}
+                        <div className="stat-card">
+                          <div className="stat-value text-blue-600">
+                            {totalDownloads}
+                          </div>
+                          <div className="stat-label">Downloads</div>
                         </div>
-                        <div className="text-sm text-muted-foreground">Total Views</div>
+                        <div className="stat-card">
+                          <div className="stat-value text-green-600">
+                            {totalViews}
+                          </div>
+                          <div className="stat-label">Views</div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
             </TabsContent>
 
-            {/* Manage Content Tab */}
-            <TabsContent value="manage">
+            {/* Pending Submissions Tab */}
+            <TabsContent value="pending" className="p-4 sm:p-6 mt-0">
               <Card>
-                <CardHeader>
-                  <CardTitle>Content Management</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {loadingContent && (
-                      <div className="text-sm text-muted-foreground">Loading content…</div>
-                    )}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div>
-                        <Label>Semester</Label>
-                        <Select value={manageSemester} onValueChange={handleManageSemesterChange}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="All Semesters" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem key="all-sem" value="all">All Semesters</SelectItem>
-                            {SEMESTER_OPTIONS.map(o => (
-                              <SelectItem key={`manage-sem-${o.value}`} value={o.value}>{o.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="md:col-span-2">
-                        <Label>Subject</Label>
-                        <Select
-                          value={manageSubjectId}
-                          onValueChange={setManageSubjectId}
-                          disabled={manageSemester === 'all'}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="All Subjects" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem key="all-subj" value="all">All Subjects</SelectItem>
-                            {Object.entries(subjectsBySem[manageSemester] || {}).map(([id, subj]) => (
-                              <SelectItem key={`manage-sub-${manageSemester}:${id}`} value={id}>
-                                {(subj as any).name
-                                }
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    {!loadingContent && filteredContent.length === 0 && (
-                      <div className="text-sm text-muted-foreground">No content found for the selected filters.</div>
-                    )}
-                    {filteredContent.slice(0, 10).map((item) => (
-                      <div key={`${item.category}:${item.semester}:${item.subjectId}:${item.id}`} className="p-4 border rounded-lg">
-                        {editItemId === item.id ? (
-                          <div className="space-y-3">
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                              <div>
-                                <Label>Type</Label>
-                                <Select value={editForm.category} onValueChange={(v: 'notes' | 'videos') => setEditForm(prev => ({ ...prev, category: v }))}>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select type" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="notes">Notes</SelectItem>
-                                    <SelectItem value="videos">Videos</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <Label>Semester</Label>
-                                <Select value={editForm.semester} onValueChange={async (v) => { setEditForm(prev => ({ ...prev, semester: v, subjectId: '' })); await ensureSubjects(v); }}>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select semester" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {SEMESTER_OPTIONS.map(o => (
-                                      <SelectItem key={`edit-sem-${o.value}`} value={o.value}>{o.label}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div className="md:col-span-2">
-                                <Label>Subject</Label>
-                                <Select value={editForm.subjectId} onValueChange={(v) => setEditForm(prev => ({ ...prev, subjectId: v }))} disabled={!editForm.semester}>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select subject" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Object.entries(subjectsBySem[editForm.semester] || {}).map(([id, s]) => (
-                                      <SelectItem key={`edit-sub-${editForm.semester}:${id}`} value={id}>{(s as any).name}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                              <div>
-                                <Label>Title</Label>
-                                <Input value={editForm.title} onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))} />
-                              </div>
-                              <div>
-                                <Label>Description</Label>
-                                <Input value={editForm.description} onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))} />
-                              </div>
-                            </div>
-                            <div>
-                              <Label>{editForm.category === 'notes' ? 'Note URL' : 'Video URL'}</Label>
-                              <Input value={editForm.url || ''} onChange={(e) => setEditForm(prev => ({ ...prev, url: e.target.value }))} placeholder={editForm.category === 'notes' ? 'https://drive.google.com/...' : 'https://...'} />
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="outline" onClick={() => setEditItemId(null)}>Cancel</Button>
-                              <Button onClick={async () => {
-                                try {
-                                  if (!editForm.semester || !editForm.subjectId || !editForm.title) {
-                                    toast({ title: 'Missing fields', description: 'Semester, subject and title are required', variant: 'destructive' });
-                                    return;
-                                  }
-                                  await firebaseService.updateContent(item, {
-                                    semester: editForm.semester,
-                                    subjectId: editForm.subjectId,
-                                    category: editForm.category,
-                                    title: editForm.title,
-                                    description: editForm.description,
-                                    url: editForm.url || '',
-                                  });
-                                  toast({ title: 'Updated', description: 'Content updated successfully' });
-                                  setEditItemId(null);
-                                  await loadAllContent();
-                                } catch (e: any) {
-                                  toast({ title: 'Update failed', description: e?.message || 'Try again', variant: 'destructive' });
-                                }
-                              }}>Save Changes</Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-4">
-                              <div className={`${item.category === 'notes' ? 'bg-primary/10' : 'bg-red-100'} w-10 h-10 rounded-lg flex items-center justify-center`}>
-                                <i className={`${item.category === 'notes' ? 'fas fa-file-pdf text-primary' : 'fas fa-play-circle text-red-600'} text-lg`}></i>
-                              </div>
-                              <div>
-                                <h4 className="font-medium">{item.title}</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {formatTimestamp(item.timestamp)} • {item.category === 'notes' ? ` ${(item as Note).downloads} downloads` : ` ${(item as Video).views} views`}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant={item.category === 'notes' ? 'default' : 'destructive'}>{item.category.toUpperCase()}</Badge>
-                              <Button variant="outline" size="sm" onClick={async () => {
-                                setEditItemId(item.id);
-                                await ensureSubjects(item.semester);
-                                setEditForm({
-                                  semester: item.semester,
-                                  subjectId: item.subjectId,
-                                  category: item.category,
-                                  title: item.title,
-                                  description: item.description || '',
-                                  url: (item as any).url || '',
-                                });
-                              }}>Edit</Button>
-                              <Button variant="outline" size="sm" onClick={() => handleDeleteItem(item)} disabled={deletingId === item.id}>
-                                {deletingId === item.id ? 'Deleting...' : 'Delete'}
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <i className="fas fa-clock text-orange-500"></i>
+                      Pending Submissions
+                    </CardTitle>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={loadPendingSubmissions}
+                      disabled={loadingPending}
+                    >
+                      <i className={`fas fa-sync-alt mr-1.5 ${loadingPending ? 'animate-spin' : ''}`}></i>
+                      Refresh
+                    </Button>
                   </div>
+                  <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                    Review and approve user-submitted content. Submissions expire after 30 days.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-4 pt-2">
+                  {loadingPending && (
+                    <div className="text-sm text-muted-foreground py-8 text-center">
+                      <div className="h-6 w-6 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                      Loading submissions...
+                    </div>
+                  )}
+
+                  {!loadingPending && pendingSubmissions.length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i className="fas fa-inbox text-muted-foreground text-2xl"></i>
+                      </div>
+                      <h4 className="font-medium text-foreground mb-1">No Pending Submissions</h4>
+                      <p className="text-sm text-muted-foreground">All submissions have been reviewed.</p>
+                    </div>
+                  )}
+
+                  {!loadingPending && pendingSubmissions.length > 0 && (
+                    <ScrollArea className="h-[400px] sm:h-[500px]">
+                      <div className="space-y-3 pr-4">
+                        {pendingSubmissions.map((submission) => {
+                          const daysRemaining = Math.max(0, Math.ceil((submission.expiresAt - Date.now()) / (1000 * 60 * 60 * 24)));
+                          const subjectName = subjectsBySem[submission.semester]?.[submission.subjectId]?.name || submission.subjectId;
+                          
+                          return (
+                            <div key={submission.id} className="p-4 border rounded-lg bg-card">
+                              <div className="flex flex-col gap-3">
+                                {/* Header with type and expiry */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant={submission.contentType === 'notes' ? 'default' : 'destructive'}>
+                                    {submission.contentType === 'notes' ? 'NOTE' : 'VIDEO'}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-xs">
+                                    Semester {submission.semester.replace('s', '')}
+                                  </Badge>
+                                  <Badge 
+                                    variant={daysRemaining <= 7 ? 'destructive' : 'secondary'} 
+                                    className="text-xs ml-auto"
+                                  >
+                                    {daysRemaining} days left
+                                  </Badge>
+                                </div>
+
+                                {/* Title and details */}
+                                <div>
+                                  <h4 className="font-semibold text-base">{submission.title}</h4>
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    Subject: {subjectName}
+                                  </p>
+                                  {submission.description && (
+                                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                                      {submission.description}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {/* URL Preview */}
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 p-2 rounded">
+                                  <i className="fas fa-link"></i>
+                                  <a 
+                                    href={submission.url} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer" 
+                                    className="truncate hover:text-primary"
+                                  >
+                                    {submission.url}
+                                  </a>
+                                </div>
+
+                                {/* Submitter info */}
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                  <span>
+                                    <i className="fas fa-user mr-1"></i>
+                                    {submission.submitterName || 'Anonymous'}
+                                  </span>
+                                  {submission.submitterEmail && (
+                                    <span>
+                                      <i className="fas fa-envelope mr-1"></i>
+                                      {submission.submitterEmail}
+                                    </span>
+                                  )}
+                                  <span>
+                                    <i className="fas fa-calendar mr-1"></i>
+                                    {new Date(submission.submittedAt).toLocaleDateString()}
+                                  </span>
+                                </div>
+
+                                {/* Action buttons */}
+                                <div className="flex gap-2 pt-2 border-t">
+                                  <Button
+                                    size="sm"
+                                    className="flex-1 bg-green-600 hover:bg-green-700"
+                                    onClick={() => handleApproveSubmission(submission.id)}
+                                    disabled={processingSubmission === submission.id}
+                                  >
+                                    {processingSubmission === submission.id ? (
+                                      <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <>
+                                        <i className="fas fa-check mr-1.5"></i>
+                                        Approve
+                                      </>
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="flex-1 text-destructive hover:text-destructive"
+                                    onClick={() => handleRejectSubmission(submission.id)}
+                                    disabled={processingSubmission === submission.id}
+                                  >
+                                    <i className="fas fa-times mr-1.5"></i>
+                                    Reject
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    asChild
+                                  >
+                                    <a href={submission.url} target="_blank" rel="noopener noreferrer">
+                                      <i className="fas fa-external-link-alt"></i>
+                                    </a>
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </ScrollArea>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Reports Tab */}
+            <TabsContent value="reports" className="p-4 sm:p-6 mt-0">
+              <Card>
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <i className="fas fa-flag text-orange-500"></i>
+                      Content Reports
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      <Select value={reportFilter} onValueChange={(v: any) => setReportFilter(v)}>
+                        <SelectTrigger className="w-[130px] h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Reports</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="reviewed">Reviewed</SelectItem>
+                          <SelectItem value="resolved">Resolved</SelectItem>
+                          <SelectItem value="dismissed">Dismissed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={loadReports}
+                        disabled={loadingReports}
+                        className="h-8"
+                      >
+                        <i className={`fas fa-sync-alt ${loadingReports ? 'animate-spin' : ''}`}></i>
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                    Review and manage content reported by users.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-4 pt-2">
+                  {loadingReports && (
+                    <div className="text-sm text-muted-foreground py-8 text-center">
+                      <div className="h-6 w-6 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                      Loading reports...
+                    </div>
+                  )}
+
+                  {!loadingReports && reports.filter(r => reportFilter === 'all' || r.status === reportFilter).length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i className="fas fa-flag text-muted-foreground text-2xl"></i>
+                      </div>
+                      <h4 className="font-medium text-foreground mb-1">No Reports</h4>
+                      <p className="text-sm text-muted-foreground">
+                        {reportFilter === 'all' ? 'No content has been reported yet.' : `No ${reportFilter} reports.`}
+                      </p>
+                    </div>
+                  )}
+
+                  {!loadingReports && reports.filter(r => reportFilter === 'all' || r.status === reportFilter).length > 0 && (
+                    <ScrollArea className="h-[400px] sm:h-[500px]">
+                      <div className="space-y-3 pr-4">
+                        {reports
+                          .filter(r => reportFilter === 'all' || r.status === reportFilter)
+                          .map((report) => (
+                          <div key={report.id} className="p-4 border rounded-lg bg-card">
+                            <div className="flex flex-col gap-3">
+                              {/* Header */}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={report.contentType === 'notes' ? 'default' : 'destructive'}>
+                                  {report.contentType === 'notes' ? 'NOTE' : 'VIDEO'}
+                                </Badge>
+                                <Badge 
+                                  variant={
+                                    report.status === 'pending' ? 'destructive' : 
+                                    report.status === 'reviewed' ? 'secondary' : 
+                                    report.status === 'resolved' ? 'default' : 'outline'
+                                  }
+                                  className="text-xs"
+                                >
+                                  {report.status.toUpperCase()}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground ml-auto">
+                                  {new Date(report.createdAt).toLocaleDateString()}
+                                </span>
+                              </div>
+
+                              {/* Content info */}
+                              <div>
+                                <h4 className="font-semibold text-base">{report.contentTitle}</h4>
+                                <p className="text-sm text-muted-foreground mt-1">
+                                  <span className="font-medium text-orange-600 dark:text-orange-400">
+                                    Reason: {REPORT_REASON_LABELS[report.reason]}
+                                  </span>
+                                </p>
+                                {report.description && (
+                                  <p className="text-sm text-muted-foreground mt-1 bg-muted/50 p-2 rounded">
+                                    "{report.description}"
+                                  </p>
+                                )}
+                              </div>
+
+                              {/* Reporter info */}
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                <span>
+                                  <i className="fas fa-user mr-1"></i>
+                                  {report.reporterName || 'Anonymous'}
+                                </span>
+                                {report.reporterEmail && (
+                                  <span>
+                                    <i className="fas fa-envelope mr-1"></i>
+                                    {report.reporterEmail}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Admin notes if any */}
+                              {report.adminNotes && (
+                                <div className="text-xs bg-blue-50 dark:bg-blue-900/20 p-2 rounded border border-blue-200 dark:border-blue-800">
+                                  <span className="font-medium">Admin Notes:</span> {report.adminNotes}
+                                </div>
+                              )}
+
+                              {/* Action buttons */}
+                              {report.status === 'pending' && (
+                                <div className="flex flex-wrap gap-2 pt-2 border-t">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleUpdateReportStatus(report.id, 'reviewed')}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    {processingReport === report.id ? (
+                                      <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <>
+                                        <i className="fas fa-eye mr-1.5"></i>
+                                        Mark Reviewed
+                                      </>
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-green-600 hover:text-green-700"
+                                    onClick={() => handleUpdateReportStatus(report.id, 'dismissed')}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    <i className="fas fa-check mr-1.5"></i>
+                                    Dismiss
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleDeleteReportedContent(report)}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    <i className="fas fa-trash mr-1.5"></i>
+                                    Delete Content
+                                  </Button>
+                                </div>
+                              )}
+                              
+                              {report.status === 'reviewed' && (
+                                <div className="flex flex-wrap gap-2 pt-2 border-t">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-green-600 hover:text-green-700"
+                                    onClick={() => handleUpdateReportStatus(report.id, 'resolved')}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    <i className="fas fa-check-circle mr-1.5"></i>
+                                    Mark Resolved
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleUpdateReportStatus(report.id, 'dismissed')}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    <i className="fas fa-times mr-1.5"></i>
+                                    Dismiss
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleDeleteReportedContent(report)}
+                                    disabled={processingReport === report.id}
+                                  >
+                                    <i className="fas fa-trash mr-1.5"></i>
+                                    Delete Content
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Manage Content Tab */}
+            <TabsContent value="manage" className="p-4 sm:p-6 mt-0">
+              <Card>
+                <CardHeader className="p-4 pb-2">
+                  <CardTitle className="text-base sm:text-lg">Content Management</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-2">
+                  {/* Filters */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+                    <div>
+                      <Label className="text-xs sm:text-sm">Semester</Label>
+                      <Select value={manageSemester} onValueChange={handleManageSemesterChange}>
+                        <SelectTrigger className="mt-1.5">
+                          <SelectValue placeholder="All Semesters" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem key="all-sem" value="all">All Semesters</SelectItem>
+                          {SEMESTER_OPTIONS.map(o => (
+                            <SelectItem key={`manage-sem-${o.value}`} value={o.value}>{o.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="sm:col-span-1 lg:col-span-2">
+                      <Label className="text-xs sm:text-sm">Subject</Label>
+                      <Select
+                        value={manageSubjectId}
+                        onValueChange={setManageSubjectId}
+                        disabled={manageSemester === 'all'}
+                      >
+                        <SelectTrigger className="mt-1.5">
+                          <SelectValue placeholder="All Subjects" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem key="all-subj" value="all">All Subjects</SelectItem>
+                          {Object.entries(subjectsBySem[manageSemester] || {}).map(([id, subj]) => (
+                            <SelectItem key={`manage-sub-${manageSemester}:${id}`} value={id}>
+                              {(subj as any).name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Loading State */}
+                  {loadingContent && (
+                    <div className="text-sm text-muted-foreground py-4 text-center">
+                      <div className="h-6 w-6 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                      Loading content...
+                    </div>
+                  )}
+
+                  {/* Empty State */}
+                  {!loadingContent && filteredContent.length === 0 && (
+                    <div className="text-sm text-muted-foreground py-8 text-center">
+                      <i className="fas fa-inbox text-3xl mb-2 opacity-50"></i>
+                      <p>No content found for the selected filters.</p>
+                    </div>
+                  )}
+
+                  {/* Content List */}
+                  <ScrollArea className="h-[400px] sm:h-[500px]">
+                    <div className="space-y-3 pr-4">
+                      {filteredContent.slice(0, 20).map((item) => (
+                        <div key={`${item.category}:${item.semester}:${item.subjectId}:${item.id}`} className="p-3 sm:p-4 border rounded-lg bg-card">
+                          {editItemId === item.id ? (
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                <div>
+                                  <Label className="text-xs">Type</Label>
+                                  <Select value={editForm.category} onValueChange={(v: 'notes' | 'videos') => setEditForm(prev => ({ ...prev, category: v }))}>
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select type" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="notes">Notes</SelectItem>
+                                      <SelectItem value="videos">Videos</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Semester</Label>
+                                  <Select value={editForm.semester} onValueChange={async (v) => { setEditForm(prev => ({ ...prev, semester: v, subjectId: '' })); await ensureSubjects(v); }}>
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select semester" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {SEMESTER_OPTIONS.map(o => (
+                                        <SelectItem key={`edit-sem-${o.value}`} value={o.value}>{o.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="sm:col-span-2">
+                                  <Label className="text-xs">Subject</Label>
+                                  <Select value={editForm.subjectId} onValueChange={(v) => setEditForm(prev => ({ ...prev, subjectId: v }))} disabled={!editForm.semester}>
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select subject" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {Object.entries(subjectsBySem[editForm.semester] || {}).map(([id, s]) => (
+                                        <SelectItem key={`edit-sub-${editForm.semester}:${id}`} value={id}>{(s as any).name}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <Label className="text-xs">Title</Label>
+                                  <Input value={editForm.title} onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))} className="mt-1" />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Description</Label>
+                                  <Input value={editForm.description} onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))} className="mt-1" />
+                                </div>
+                              </div>
+                              <div>
+                                <Label className="text-xs">{editForm.category === 'notes' ? 'Note URL' : 'Video URL'}</Label>
+                                <Input value={editForm.url || ''} onChange={(e) => setEditForm(prev => ({ ...prev, url: e.target.value }))} placeholder={editForm.category === 'notes' ? 'https://drive.google.com/...' : 'https://...'} className="mt-1" />
+                              </div>
+                              <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-2">
+                                <Button variant="outline" size="sm" onClick={() => setEditItemId(null)}>Cancel</Button>
+                                <Button size="sm" onClick={async () => {
+                                  try {
+                                    if (!editForm.semester || !editForm.subjectId || !editForm.title) {
+                                      toast({ title: 'Missing fields', description: 'Semester, subject and title are required', variant: 'destructive' });
+                                      return;
+                                    }
+                                    await firebaseService.updateContent(item, {
+                                      semester: editForm.semester,
+                                      subjectId: editForm.subjectId,
+                                      category: editForm.category,
+                                      title: editForm.title,
+                                      description: editForm.description,
+                                      url: editForm.url || '',
+                                    });
+                                    toast({ title: 'Updated', description: 'Content updated successfully' });
+                                    setEditItemId(null);
+                                    await loadAllContent();
+                                  } catch (e: any) {
+                                    toast({ title: 'Update failed', description: e?.message || 'Try again', variant: 'destructive' });
+                                  }
+                                }}>Save Changes</Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className={`${item.category === 'notes' ? 'bg-primary/10' : 'bg-red-100 dark:bg-red-900/30'} w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shrink-0`}>
+                                  <i className={`${item.category === 'notes' ? 'fas fa-file-pdf text-primary' : 'fas fa-play-circle text-red-600'} text-sm sm:text-base`}></i>
+                                </div>
+                                <div className="min-w-0">
+                                  <h4 className="font-medium text-sm sm:text-base truncate">{item.title}</h4>
+                                  <p className="text-xs text-muted-foreground">
+                                    {formatTimestamp(item.timestamp)} • {item.category === 'notes' ? `${(item as Note).downloads} downloads` : `${(item as Video).views} views`}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 sm:shrink-0">
+                                <Badge variant={item.category === 'notes' ? 'default' : 'destructive'} className="text-xs">
+                                  {item.category.toUpperCase()}
+                                </Badge>
+                                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={async () => {
+                                  setEditItemId(item.id);
+                                  await ensureSubjects(item.semester);
+                                  setEditForm({
+                                    semester: item.semester,
+                                    subjectId: item.subjectId,
+                                    category: item.category,
+                                    title: item.title,
+                                    description: item.description || '',
+                                    url: (item as any).url || '',
+                                  });
+                                }}>Edit</Button>
+                                <Button variant="outline" size="sm" className="h-8 text-xs text-destructive hover:text-destructive" onClick={() => handleDeleteItem(item)} disabled={deletingId === item.id}>
+                                  {deletingId === item.id ? '...' : 'Delete'}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
             </TabsContent>
 
             {/* Statistics Tab */}
-            <TabsContent value="statistics">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <TabsContent value="statistics" className="p-4 sm:p-6 mt-0">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <Card>
-                  <CardHeader>
-                    <CardTitle>Content Overview</CardTitle>
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base sm:text-lg">Content Overview</CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {loadingContent && (
-                        <div className="text-sm text-muted-foreground">Loading statistics…</div>
-                      )}
-                      <div className="flex justify-between">
-                        <span>Total Content Items</span>
-                        <span className="font-semibold">{content.length}</span>
+                  <CardContent className="p-4 pt-2">
+                    {loadingContent ? (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                        Loading...
                       </div>
-                      <div className="flex justify-between">
-                        <span>PDF Notes</span>
-                        <span className="font-semibold text-primary">
-                          {content.filter(item => item.category === "notes").length}
-                        </span>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">Total Content Items</span>
+                          <span className="font-semibold">{content.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">PDF Notes</span>
+                          <span className="font-semibold text-primary">
+                            {content.filter(item => item.category === "notes").length}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">Video Resources</span>
+                          <span className="font-semibold text-red-600">
+                            {content.filter(item => item.category === "videos").length}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Video Resources</span>
-                        <span className="font-semibold text-red-600">
-                          {content.filter(item => item.category === "videos").length}
-                        </span>
-                      </div>
-                    </div>
+                    )}
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardHeader>
-                    <CardTitle>Engagement Stats</CardTitle>
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base sm:text-lg">Engagement Stats</CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      <div className="flex justify-between">
-                        <span>Total Downloads</span>
-                        <span className="font-semibold text-blue-600">{totalDownloads}</span>
+                  <CardContent className="p-4 pt-2">
+                    {loadingContent ? (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                        Loading...
                       </div>
-                      <div className="flex justify-between">
-                        <span>Total Video Views</span>
-                        <span className="font-semibold text-green-600">{totalViews}</span>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">Total Downloads</span>
+                          <span className="font-semibold text-blue-600">{totalDownloads}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">Total Video Views</span>
+                          <span className="font-semibold text-green-600">{totalViews}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
+                          <span className="text-sm">Avg. Downloads per Note</span>
+                          <span className="font-semibold">
+                            {content.filter(item => item.category === "notes").length > 0 
+                              ? Math.round(totalDownloads / content.filter(item => item.category === "notes").length * 10) / 10
+                              : 0}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Avg. Downloads per Note</span>
-                        <span className="font-semibold">
-                          {content.filter(item => item.category === "notes").length > 0 
-                            ? Math.round(totalDownloads / content.filter(item => item.category === "notes").length * 10) / 10
-                            : 0}
-                        </span>
-                      </div>
-                    </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -751,97 +1350,121 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
 
             {/* User Management Tab (Super Admin Only) */}
             {isSuperAdmin && (
-              <TabsContent value="users">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>User Management</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-6">
-                      <Card className="bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800">
-                        <CardContent className="pt-6">
-                          <h3 className="text-lg font-semibold mb-4">Promote User to Admin</h3>
-                          <div className="flex gap-4">
-                            <div className="flex-1">
-                              <Label className="sr-only">Select user</Label>
-                              <Select value={selectedUser} onValueChange={(v) => setSelectedUser(v)}>
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select user to promote" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {users.filter(u => {
-                                    const r = (u.role || '').toLowerCase();
-                                    return r === 'student' || r === '';
-                                  }).map(u => (
-                                    <SelectItem key={`${u.uid}:${u.email}`} value={u.uid}>
-                                      {u.name} ({u.email})
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <Button onClick={handlePromoteUser} disabled={!selectedUser} className="bg-orange-600 hover:bg-orange-700">
-                              Promote to Admin
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
+              <TabsContent value="users" className="p-4 sm:p-6 mt-0">
+                <div className="space-y-4 sm:space-y-6">
+                  {/* Add Admin Section */}
+                  <Card className="border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-900/10">
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-base sm:text-lg">Admin Management</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-2 space-y-4">
+                      {/* Promote User */}
+                      <div>
+                        <Label className="text-sm font-medium">Promote User to Admin</Label>
+                        <div className="flex flex-col sm:flex-row gap-2 mt-2">
+                          <Select value={selectedUser} onValueChange={(v) => setSelectedUser(v)}>
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="Select user to promote" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {users.filter(u => {
+                                const r = (u.role || '').toLowerCase();
+                                return r === 'student' || r === '';
+                              }).map(u => (
+                                <SelectItem key={`${u.uid}:${u.email}`} value={u.uid}>
+                                  {u.name} ({u.email})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button onClick={handlePromoteUser} disabled={!selectedUser} className="bg-orange-600 hover:bg-orange-700 shrink-0">
+                            Promote
+                          </Button>
+                        </div>
+                      </div>
 
-                      <Card>
-                        <CardHeader>
-                          <CardTitle>Admins</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex gap-2 mb-4">
-                            <Input placeholder="email@domain.com" value={newAdminEmail} onChange={(e) => setNewAdminEmail(e.target.value)} />
-                            <Button onClick={handleAddAdmin} disabled={addingAdmin}>
-                              {addingAdmin ? 'Adding…' : 'Add Admin'}
-                            </Button>
-                          </div>
-                          <div className="space-y-2">
-                            {admins.length === 0 && <p className="text-sm text-muted-foreground">No admins configured.</p>}
+                      {/* Add Admin by Email */}
+                      <div>
+                        <Label className="text-sm font-medium">Add Admin by Email</Label>
+                        <div className="flex flex-col sm:flex-row gap-2 mt-2">
+                          <Input 
+                            placeholder="email@domain.com" 
+                            value={newAdminEmail} 
+                            onChange={(e) => setNewAdminEmail(e.target.value)} 
+                            className="flex-1"
+                          />
+                          <Button onClick={handleAddAdmin} disabled={addingAdmin} className="shrink-0">
+                            {addingAdmin ? 'Adding...' : 'Add Admin'}
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Current Admins */}
+                  <Card>
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-base sm:text-lg">Current Admins</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-2">
+                      {admins.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">No admins configured.</p>
+                      ) : (
+                        <ScrollArea className="h-[200px]">
+                          <div className="space-y-2 pr-4">
                             {admins.map(a => (
-                              <div key={`admin:${a.key}`} className="flex items-center justify-between p-3 border rounded">
-                                <div>
-                                  <div className="font-medium">{a.email}</div>
+                              <div key={`admin:${a.key}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border rounded-lg">
+                                <div className="min-w-0">
+                                  <div className="font-medium text-sm truncate">{a.email}</div>
                                   <div className="text-xs text-muted-foreground">{a.role}</div>
                                 </div>
                                 <Button
                                   variant="outline"
                                   size="sm"
+                                  className="text-xs h-8 text-destructive hover:text-destructive shrink-0"
                                   onClick={() => handleRemoveAdmin(a.key)}
                                   disabled={removingAdminKey === a.key}
                                 >
-                                  {removingAdminKey === a.key ? 'Removing…' : 'Remove'}
+                                  {removingAdminKey === a.key ? 'Removing...' : 'Remove'}
                                 </Button>
                               </div>
                             ))}
                           </div>
-                        </CardContent>
-                      </Card>
+                        </ScrollArea>
+                      )}
+                    </CardContent>
+                  </Card>
 
-                      <div>
-                        <h3 className="text-lg font-semibold mb-4">All Users</h3>
-                        <div className="space-y-3">
+                  {/* All Users */}
+                  <Card>
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-base sm:text-lg">All Users ({users.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-2">
+                      <ScrollArea className="h-[300px]">
+                        <div className="space-y-2 pr-4">
                           {users.map((user, idx) => (
-                            <div key={`${user.uid || user.email || idx}`} className="flex items-center justify-between p-4 border rounded-lg">
-                              <div>
-                                <h4 className="font-medium">{user.name}</h4>
-                                <p className="text-sm text-muted-foreground">{user.email}</p>
+                            <div key={`${user.uid || user.email || idx}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border rounded-lg">
+                              <div className="min-w-0">
+                                <h4 className="font-medium text-sm truncate">{user.name}</h4>
+                                <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                               </div>
-                              <Badge variant={
-                                user.role === "superadmin" ? "default" : 
-                                user.role === "admin" ? "secondary" : "outline"
-                              }>
+                              <Badge 
+                                variant={
+                                  user.role === "superadmin" ? "default" : 
+                                  user.role === "admin" ? "secondary" : "outline"
+                                }
+                                className="text-xs shrink-0"
+                              >
                                 {user.role}
                               </Badge>
                             </div>
                           ))}
                         </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </div>
               </TabsContent>
             )}
           </Tabs>

@@ -1,9 +1,122 @@
 import { ref, set, push, remove, onValue, off, get } from "firebase/database";
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { database, storage } from "./firebase";
-import { Note, Video, Subject, User, InsertNote, InsertVideo, ContentItem } from "@shared/schema";
+import { 
+  Note, Video, Subject, User, InsertNote, InsertVideo, ContentItem, 
+  PendingSubmission, InsertPendingSubmission,
+  AppNotification, InsertAppNotification,
+  Rating, InsertRating,
+  Report, InsertReport,
+  Scheme, InsertScheme, DEFAULT_SCHEMES
+} from "@shared/schema";
+
+// 30 days in milliseconds
+const PENDING_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Current scheme (defaults to 2019)
+let currentScheme = "2019";
 
 export class FirebaseService {
+  // Scheme Management
+  getCurrentScheme(): string {
+    return currentScheme;
+  }
+
+  setCurrentScheme(schemeId: string): void {
+    currentScheme = schemeId;
+  }
+
+  async getSchemes(): Promise<Scheme[]> {
+    try {
+      const snap = await get(ref(database, 'schemes'));
+      const val = snap.val();
+      if (!val) {
+        // Initialize with default 2019 scheme
+        await this.initializeDefaultScheme();
+        return DEFAULT_SCHEMES.map(s => ({ ...s, createdAt: Date.now() }));
+      }
+      
+      return Object.entries(val as Record<string, any>).map(([id, data]) => ({
+        id,
+        name: data.name || `${id} Scheme`,
+        year: data.year || parseInt(id) || 2019,
+        description: data.description || '',
+        isDefault: data.isDefault || false,
+        createdAt: data.createdAt || Date.now(),
+        createdBy: data.createdBy,
+      })).sort((a, b) => b.year - a.year);
+    } catch (error) {
+      console.error('Error getting schemes:', error);
+      return DEFAULT_SCHEMES.map(s => ({ ...s, createdAt: Date.now() }));
+    }
+  }
+
+  async initializeDefaultScheme(): Promise<void> {
+    try {
+      const schemeRef = ref(database, 'schemes/2019');
+      await set(schemeRef, {
+        name: "2019 Scheme",
+        year: 2019,
+        description: "KTU 2019 Curriculum",
+        isDefault: true,
+        createdAt: Date.now(),
+      });
+    } catch (error) {
+      console.error('Error initializing default scheme:', error);
+    }
+  }
+
+  async createScheme(scheme: InsertScheme): Promise<string> {
+    try {
+      const schemeId = scheme.year.toString();
+      const schemeRef = ref(database, `schemes/${schemeId}`);
+      
+      // Check if scheme already exists
+      const existing = await get(schemeRef);
+      if (existing.val()) {
+        throw new Error(`Scheme ${schemeId} already exists`);
+      }
+      
+      const schemeData: Scheme = {
+        ...scheme,
+        id: schemeId,
+        createdAt: Date.now(),
+      };
+      
+      await set(schemeRef, schemeData);
+      return schemeId;
+    } catch (error) {
+      console.error('Error creating scheme:', error);
+      throw error;
+    }
+  }
+
+  async deleteScheme(schemeId: string): Promise<void> {
+    if (schemeId === "2019") {
+      throw new Error("Cannot delete the default 2019 scheme");
+    }
+    
+    try {
+      // Delete scheme
+      await remove(ref(database, `schemes/${schemeId}`));
+      // Also delete all subjects, notes, and videos for this scheme
+      await remove(ref(database, `subjects_${schemeId}`));
+      await remove(ref(database, `notes_${schemeId}`));
+      await remove(ref(database, `videos_${schemeId}`));
+    } catch (error) {
+      console.error('Error deleting scheme:', error);
+      throw error;
+    }
+  }
+
+  // Get the database path based on current scheme
+  private getSchemeBasePath(basePath: string): string {
+    if (currentScheme === "2019") {
+      return basePath; // Default paths for 2019 scheme
+    }
+    return `${basePath}_${currentScheme}`;
+  }
+
   // Admin helpers
   async getAdmins(): Promise<Array<{ key: string; email: string; role: string; isPermanent?: boolean; addedAt?: number; addedBy?: string; nickname?: string }>> {
     try {
@@ -82,7 +195,7 @@ export class FirebaseService {
     }
   }
 
-  async addAdmin(params: { email: string; nickname?: string; role?: 'admin' | 'superadmin'; addedBy?: string }): Promise<void> {
+  async addAdmin(params: { email: string; nickname?: string; role?: 'admin' | 'superadmin'; addedBy?: string; addedByName?: string }): Promise<void> {
     const email = params.email.trim();
     if (!email) throw new Error('Email is required');
     // prevent duplicates
@@ -99,27 +212,93 @@ export class FirebaseService {
     if (params.addedBy) entry.addedBy = params.addedBy;
     const adminsRef = push(ref(database, 'admins'));
     await set(adminsRef, entry);
+    
+    // Notify all other admins about the new admin
+    await this.notifyAdminsOfAdminChange({
+      type: 'added',
+      targetEmail: email,
+      targetNickname: params.nickname,
+      targetRole: params.role || 'admin',
+      byUserEmail: params.addedBy,
+      byUserName: params.addedByName,
+    });
   }
 
-  async removeAdminByKey(adminKey: string): Promise<void> {
+  async removeAdminByKey(adminKey: string, removedBy?: string, removedByName?: string): Promise<void> {
     // Load entry to check protection
     const entrySnap = await get(ref(database, `admins/${adminKey}`));
     const entryVal = entrySnap.val();
     let email: string | null = null;
+    let nickname: string | undefined;
     if (!entryVal) throw new Error('Admin not found');
     if (typeof entryVal === 'string') {
       email = entryVal;
     } else if (typeof entryVal === 'object') {
       email = entryVal.email || entryVal.userEmail || (adminKey.includes('@') ? adminKey : null);
+      nickname = entryVal.nickname;
     }
     if (!email) throw new Error('Cannot resolve admin email');
     if (await this.isProtectedAdmin(email)) {
       throw new Error('Cannot remove the head admin');
     }
     await remove(ref(database, `admins/${adminKey}`));
+    
+    // Notify all admins about the removal
+    await this.notifyAdminsOfAdminChange({
+      type: 'removed',
+      targetEmail: email,
+      targetNickname: nickname,
+      byUserEmail: removedBy,
+      byUserName: removedByName,
+    });
   }
+  
+  // Notify all admins when an admin is added or removed
+  private async notifyAdminsOfAdminChange(params: {
+    type: 'added' | 'removed';
+    targetEmail: string;
+    targetNickname?: string;
+    targetRole?: string;
+    byUserEmail?: string;
+    byUserName?: string;
+  }): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      const targetDisplay = params.targetNickname || params.targetEmail;
+      const byDisplay = params.byUserName || params.byUserEmail || 'Unknown';
+      
+      const title = params.type === 'added' ? 'New Admin Added' : 'Admin Removed';
+      const message = params.type === 'added'
+        ? `${targetDisplay} (${params.targetEmail}) was added as ${params.targetRole || 'admin'} by ${byDisplay}.`
+        : `${targetDisplay} (${params.targetEmail}) was removed from admin by ${byDisplay}.`;
+      
+      for (const admin of admins) {
+        // Don't notify the person who was removed
+        if (params.type === 'removed' && admin.email.toLowerCase() === params.targetEmail.toLowerCase()) {
+          continue;
+        }
+        
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        if (adminUser) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: params.type === 'added' ? 'admin_added' : 'admin_removed',
+            title,
+            message,
+            fromUser: params.byUserEmail,
+            fromUserName: params.byUserName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of admin change:', error);
+    }
+  }
+  
   // Notes operations
-  async createNote(note: InsertNote, file?: File): Promise<string> {
+  async createNote(note: InsertNote, file?: File, addedByAdmin?: { uid: string; name?: string; email?: string }): Promise<string> {
     try {
       // If a file is provided, upload to Storage; otherwise, use provided URL
       let finalUrl = note.url;
@@ -141,6 +320,17 @@ export class FirebaseService {
       };
 
       await set(noteRef, noteData);
+      
+      // If added by admin directly (not via submission approval), notify other admins
+      if (addedByAdmin) {
+        await this.notifyAdminsOfDirectContent({
+          title: note.title,
+          contentType: 'notes',
+          addedBy: addedByAdmin.uid,
+          addedByName: addedByAdmin.name || addedByAdmin.email,
+        });
+      }
+      
       return noteRef.key!;
     } catch (error) {
       console.error('Error creating note:', error);
@@ -221,7 +411,7 @@ export class FirebaseService {
     }
   }
 
-  async createVideo(video: InsertVideo): Promise<string> {
+  async createVideo(video: InsertVideo, addedByAdmin?: { uid: string; name?: string; email?: string }): Promise<string> {
     try {
       // Create video record in Realtime Database under nested path
       const videoRef = push(ref(database, `videos/${video.semester}/${video.subjectId}`));
@@ -234,10 +424,54 @@ export class FirebaseService {
       };
 
       await set(videoRef, videoData);
+      
+      // If added by admin directly (not via submission approval), notify other admins
+      if (addedByAdmin) {
+        await this.notifyAdminsOfDirectContent({
+          title: video.title,
+          contentType: 'videos',
+          addedBy: addedByAdmin.uid,
+          addedByName: addedByAdmin.name || addedByAdmin.email,
+        });
+      }
+      
       return videoRef.key!;
     } catch (error) {
       console.error('Error creating video:', error);
       throw error;
+    }
+  }
+  
+  // Notify admins when an admin directly adds content
+  private async notifyAdminsOfDirectContent(params: {
+    title: string;
+    contentType: 'notes' | 'videos';
+    addedBy: string;
+    addedByName?: string;
+  }): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      const adderDisplay = params.addedByName || 'An admin';
+      
+      for (const admin of admins) {
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        // Don't notify the person who added it
+        if (adminUser && adminUser.uid !== params.addedBy) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'admin_content_added',
+            title: 'New Content Added',
+            message: `${adderDisplay} added a new ${params.contentType === 'notes' ? 'note' : 'video'}: "${params.title}".`,
+            contentType: params.contentType,
+            fromUser: params.addedBy,
+            fromUserName: params.addedByName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of direct content:', error);
     }
   }
 
@@ -248,6 +482,751 @@ export class FirebaseService {
     } catch (error) {
       console.error('Error deleting video:', error);
       throw error;
+    }
+  }
+
+  // Pending Submissions operations
+  async createPendingSubmission(submission: InsertPendingSubmission): Promise<string> {
+    try {
+      const pendingRef = push(ref(database, 'pendingSubmissions'));
+      const now = Date.now();
+      const pendingData: PendingSubmission = {
+        ...submission,
+        id: pendingRef.key!,
+        submittedAt: now,
+        expiresAt: now + PENDING_EXPIRY_MS, // 30 days from now
+        status: "pending",
+      };
+      
+      await set(pendingRef, pendingData);
+      return pendingRef.key!;
+    } catch (error) {
+      console.error('Error creating pending submission:', error);
+      throw error;
+    }
+  }
+
+  async getPendingSubmissions(): Promise<PendingSubmission[]> {
+    try {
+      const snap = await get(ref(database, 'pendingSubmissions'));
+      const val = snap.val();
+      if (!val) return [];
+      
+      const now = Date.now();
+      const submissions: PendingSubmission[] = [];
+      
+      for (const [id, data] of Object.entries(val as Record<string, any>)) {
+        // Skip expired submissions
+        if (data.expiresAt && data.expiresAt < now) {
+          // Auto-delete expired submissions
+          await remove(ref(database, `pendingSubmissions/${id}`));
+          continue;
+        }
+        
+        submissions.push({
+          id,
+          semester: data.semester,
+          subjectId: data.subjectId,
+          title: data.title,
+          url: data.url,
+          description: data.description || '',
+          contentType: data.contentType,
+          submittedBy: data.submittedBy || '',
+          submitterName: data.submitterName,
+          submitterEmail: data.submitterEmail,
+          submittedAt: data.submittedAt,
+          expiresAt: data.expiresAt,
+          status: data.status || 'pending',
+        });
+      }
+      
+      return submissions.sort((a, b) => b.submittedAt - a.submittedAt);
+    } catch (error) {
+      console.error('Error getting pending submissions:', error);
+      return [];
+    }
+  }
+
+  async approvePendingSubmission(submissionId: string, approvedBy?: string, approvedByName?: string): Promise<void> {
+    try {
+      // Get the pending submission
+      const snap = await get(ref(database, `pendingSubmissions/${submissionId}`));
+      const submission = snap.val() as PendingSubmission | null;
+      
+      if (!submission) {
+        throw new Error('Submission not found');
+      }
+      
+      // Create the actual content based on type
+      if (submission.contentType === 'notes') {
+        await this.createNote({
+          semester: submission.semester,
+          subjectId: submission.subjectId,
+          title: submission.title,
+          description: submission.description || `Submitted by ${submission.submitterName || 'Anonymous'}`,
+          url: submission.url,
+          uploadedBy: submission.submittedBy,
+          category: 'notes',
+        });
+      } else {
+        await this.createVideo({
+          semester: submission.semester,
+          subjectId: submission.subjectId,
+          title: submission.title,
+          description: submission.description || `Submitted by ${submission.submitterName || 'Anonymous'}`,
+          url: submission.url,
+          uploadedBy: submission.submittedBy,
+          category: 'videos',
+        });
+      }
+      
+      // Notify the submitter that their content was approved
+      if (submission.submittedBy) {
+        await this.createNotification({
+          userId: submission.submittedBy,
+          type: 'submission_approved',
+          title: 'Submission Approved! 🎉',
+          message: `Your ${submission.contentType === 'notes' ? 'note' : 'video'} "${submission.title}" has been approved and is now live.`,
+          contentType: submission.contentType,
+          fromUser: approvedBy,
+          fromUserName: approvedByName,
+        });
+      }
+      
+      // Notify other admins about the approval
+      await this.notifyAdminsOfContentApproval({
+        submission,
+        approvedBy,
+        approvedByName,
+      });
+      
+      // Remove the pending submission
+      await remove(ref(database, `pendingSubmissions/${submissionId}`));
+    } catch (error) {
+      console.error('Error approving submission:', error);
+      throw error;
+    }
+  }
+  
+  // Notify admins when content is approved
+  private async notifyAdminsOfContentApproval(params: {
+    submission: PendingSubmission;
+    approvedBy?: string;
+    approvedByName?: string;
+  }): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      const approverDisplay = params.approvedByName || params.approvedBy || 'An admin';
+      
+      for (const admin of admins) {
+        // Don't notify the person who approved
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        if (adminUser && adminUser.uid !== params.approvedBy) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'content_approved',
+            title: 'Content Approved',
+            message: `${approverDisplay} approved "${params.submission.title}" (${params.submission.contentType}) submitted by ${params.submission.submitterName || 'Anonymous'}.`,
+            contentType: params.submission.contentType,
+            fromUser: params.approvedBy,
+            fromUserName: params.approvedByName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of content approval:', error);
+    }
+  }
+
+  async rejectPendingSubmission(submissionId: string, rejectedBy?: string, rejectedByName?: string, reason?: string): Promise<void> {
+    try {
+      // Get the submission first to notify the submitter
+      const snap = await get(ref(database, `pendingSubmissions/${submissionId}`));
+      const submission = snap.val() as PendingSubmission | null;
+      
+      if (submission && submission.submittedBy) {
+        // Notify the submitter that their content was rejected
+        await this.createNotification({
+          userId: submission.submittedBy,
+          type: 'submission_rejected',
+          title: 'Submission Not Approved',
+          message: `Your ${submission.contentType === 'notes' ? 'note' : 'video'} "${submission.title}" was not approved.${reason ? ` Reason: ${reason}` : ''} You can try submitting again with improvements.`,
+          contentType: submission.contentType,
+          fromUser: rejectedBy,
+          fromUserName: rejectedByName,
+        });
+      }
+      
+      await remove(ref(database, `pendingSubmissions/${submissionId}`));
+    } catch (error) {
+      console.error('Error rejecting submission:', error);
+      throw error;
+    }
+  }
+
+  async cleanupExpiredSubmissions(): Promise<number> {
+    try {
+      const snap = await get(ref(database, 'pendingSubmissions'));
+      const val = snap.val();
+      if (!val) return 0;
+      
+      const now = Date.now();
+      let deletedCount = 0;
+      
+      for (const [id, data] of Object.entries(val as Record<string, any>)) {
+        if (data.expiresAt && data.expiresAt < now) {
+          await remove(ref(database, `pendingSubmissions/${id}`));
+          deletedCount++;
+        }
+      }
+      
+      return deletedCount;
+    } catch (error) {
+      console.error('Error cleaning up expired submissions:', error);
+      return 0;
+    }
+  }
+
+  // ==================== NOTIFICATION OPERATIONS ====================
+  
+  // Helper to send browser push notification
+  private async sendBrowserNotification(notification: InsertAppNotification): Promise<void> {
+    // Check if we have permission and the API is available
+    if (!('Notification' in window) || window.Notification.permission !== 'granted') {
+      return;
+    }
+
+    try {
+      // Create a browser notification
+      const options: NotificationOptions = {
+        body: notification.message,
+        icon: '/icon-192x192.png',
+        badge: '/icon-192x192.png',
+        tag: notification.contentId || 'general',
+        silent: false,
+        data: {
+          url: '/',
+          type: notification.type,
+        }
+      };
+
+      // Use service worker for background notifications if available
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(notification.title, options);
+      } else {
+        // Fallback to regular notification
+        new Notification(notification.title, options);
+      }
+    } catch (error) {
+      console.error('Error sending browser notification:', error);
+    }
+  }
+
+  async createNotification(notification: InsertAppNotification): Promise<string> {
+    try {
+      const notifRef = push(ref(database, `notifications/${notification.userId}`));
+      const notifData: AppNotification = {
+        ...notification,
+        id: notifRef.key!,
+        read: false,
+        createdAt: Date.now(),
+      };
+      await set(notifRef, notifData);
+      
+      // Also send browser push notification
+      await this.sendBrowserNotification(notification);
+      
+      return notifRef.key!;
+    } catch (error) {
+      console.error('Error creating notification:', error);
+      throw error;
+    }
+  }
+
+  async getUserNotifications(userId: string, limit: number = 50): Promise<AppNotification[]> {
+    try {
+      const snap = await get(ref(database, `notifications/${userId}`));
+      const val = snap.val();
+      if (!val) return [];
+      
+      const notifications: AppNotification[] = Object.entries(val as Record<string, any>).map(([id, data]) => ({
+        id,
+        userId,
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        contentId: data.contentId,
+        contentType: data.contentType,
+        fromUser: data.fromUser,
+        fromUserName: data.fromUserName,
+        read: data.read || false,
+        createdAt: data.createdAt,
+      }));
+      
+      return notifications.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    } catch (error) {
+      console.error('Error getting notifications:', error);
+      return [];
+    }
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    try {
+      const notifications = await this.getUserNotifications(userId);
+      return notifications.filter(n => !n.read).length;
+    } catch (error) {
+      console.error('Error getting unread count:', error);
+      return 0;
+    }
+  }
+
+  async markNotificationAsRead(userId: string, notificationId: string): Promise<void> {
+    try {
+      await set(ref(database, `notifications/${userId}/${notificationId}/read`), true);
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      throw error;
+    }
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<void> {
+    try {
+      const notifications = await this.getUserNotifications(userId);
+      await Promise.all(
+        notifications.filter(n => !n.read).map(n => 
+          set(ref(database, `notifications/${userId}/${n.id}/read`), true)
+        )
+      );
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      throw error;
+    }
+  }
+
+  async deleteNotification(userId: string, notificationId: string): Promise<void> {
+    try {
+      await remove(ref(database, `notifications/${userId}/${notificationId}`));
+    } catch (error) {
+      console.error('Error deleting notification:', error);
+      throw error;
+    }
+  }
+
+  // Notify all admins about new pending submission
+  async notifyAdminsOfPendingSubmission(submission: PendingSubmission): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      for (const admin of admins) {
+        // Find the user ID for this admin email
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        if (adminUser) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'pending_approval',
+            title: 'New Submission Pending',
+            message: `"${submission.title}" submitted by ${submission.submitterName || 'Anonymous'} is awaiting approval.`,
+            contentId: submission.id,
+            contentType: submission.contentType,
+            fromUser: submission.submittedBy,
+            fromUserName: submission.submitterName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins:', error);
+    }
+  }
+
+  // Listen for real-time notification updates
+  onNotificationsChange(userId: string, callback: (notifications: AppNotification[]) => void): () => void {
+    const notifRef = ref(database, `notifications/${userId}`);
+    
+    const listener = (snapshot: any) => {
+      const val = snapshot.val();
+      if (!val) {
+        callback([]);
+        return;
+      }
+      
+      const notifications: AppNotification[] = Object.entries(val as Record<string, any>).map(([id, data]) => ({
+        id,
+        userId,
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        contentId: data.contentId,
+        contentType: data.contentType,
+        fromUser: data.fromUser,
+        fromUserName: data.fromUserName,
+        read: data.read || false,
+        createdAt: data.createdAt,
+      }));
+      
+      callback(notifications.sort((a, b) => b.createdAt - a.createdAt));
+    };
+    
+    onValue(notifRef, listener);
+    return () => off(notifRef, 'value', listener);
+  }
+
+  // ==================== RATING OPERATIONS ====================
+
+  async createOrUpdateRating(rating: InsertRating): Promise<string> {
+    try {
+      // Check if user already rated this content
+      const existingRating = await this.getUserRatingForContent(rating.userId, rating.contentId, rating.contentType);
+      
+      if (existingRating) {
+        // Update existing rating
+        const ratingPath = `ratings/${rating.contentType}/${rating.semester}/${rating.subjectId}/${rating.contentId}/${existingRating.id}`;
+        await set(ref(database, ratingPath), {
+          ...existingRating,
+          rating: rating.rating,
+          updatedAt: Date.now(),
+        });
+        return existingRating.id;
+      } else {
+        // Create new rating
+        const ratingRef = push(ref(database, `ratings/${rating.contentType}/${rating.semester}/${rating.subjectId}/${rating.contentId}`));
+        const ratingData: Rating = {
+          ...rating,
+          id: ratingRef.key!,
+          createdAt: Date.now(),
+        };
+        await set(ratingRef, ratingData);
+        
+        // Notify the content uploader
+        await this.notifyContentOwnerOfRating(rating, ratingData.id);
+        
+        return ratingRef.key!;
+      }
+    } catch (error) {
+      console.error('Error creating/updating rating:', error);
+      throw error;
+    }
+  }
+
+  async getUserRatingForContent(userId: string, contentId: string, contentType: 'notes' | 'videos'): Promise<Rating | null> {
+    try {
+      // We need to search through ratings to find this user's rating
+      // This is a bit inefficient, but works for now
+      const ratingsSnap = await get(ref(database, `ratings/${contentType}`));
+      const semesterData = ratingsSnap.val();
+      if (!semesterData) return null;
+      
+      for (const [semester, subjectData] of Object.entries(semesterData as Record<string, any>)) {
+        if (!subjectData) continue;
+        for (const [subjectId, contentData] of Object.entries(subjectData as Record<string, any>)) {
+          if (!contentData) continue;
+          const contentRatings = contentData[contentId];
+          if (!contentRatings) continue;
+          
+          for (const [ratingId, ratingData] of Object.entries(contentRatings as Record<string, any>)) {
+            if (ratingData.userId === userId) {
+              return {
+                id: ratingId,
+                contentId,
+                contentType,
+                semester,
+                subjectId,
+                userId: ratingData.userId,
+                userName: ratingData.userName,
+                rating: ratingData.rating,
+                createdAt: ratingData.createdAt,
+                updatedAt: ratingData.updatedAt,
+              };
+            }
+          }
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting user rating:', error);
+      return null;
+    }
+  }
+
+  async getContentRatings(contentId: string, contentType: 'notes' | 'videos', semester: string, subjectId: string): Promise<Rating[]> {
+    try {
+      const snap = await get(ref(database, `ratings/${contentType}/${semester}/${subjectId}/${contentId}`));
+      const val = snap.val();
+      if (!val) return [];
+      
+      return Object.entries(val as Record<string, any>).map(([id, data]) => ({
+        id,
+        contentId,
+        contentType,
+        semester,
+        subjectId,
+        userId: data.userId,
+        userName: data.userName,
+        rating: data.rating,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+      }));
+    } catch (error) {
+      console.error('Error getting content ratings:', error);
+      return [];
+    }
+  }
+
+  async getAverageRating(contentId: string, contentType: 'notes' | 'videos', semester: string, subjectId: string): Promise<{ average: number; count: number }> {
+    try {
+      const ratings = await this.getContentRatings(contentId, contentType, semester, subjectId);
+      if (ratings.length === 0) return { average: 0, count: 0 };
+      
+      const sum = ratings.reduce((acc, r) => acc + r.rating, 0);
+      return { average: sum / ratings.length, count: ratings.length };
+    } catch (error) {
+      console.error('Error getting average rating:', error);
+      return { average: 0, count: 0 };
+    }
+  }
+
+  private async notifyContentOwnerOfRating(rating: InsertRating, ratingId: string): Promise<void> {
+    try {
+      // Get the content to find the owner
+      const contentPath = rating.contentType === 'notes' 
+        ? `notes/${rating.semester}/${rating.subjectId}/${rating.contentId}`
+        : `videos/${rating.semester}/${rating.subjectId}/${rating.contentId}`;
+      
+      const contentSnap = await get(ref(database, contentPath));
+      const content = contentSnap.val();
+      
+      if (content && content.uploadedBy && content.uploadedBy !== rating.userId) {
+        // Find the owner's user ID
+        const allUsers = await this.getAllUsers();
+        const owner = allUsers.find(u => u.uid === content.uploadedBy || u.email === content.uploadedBy);
+        
+        if (owner) {
+          await this.createNotification({
+            userId: owner.uid,
+            type: 'content_rated',
+            title: 'Your Content Was Rated',
+            message: `${rating.userName || 'Someone'} rated your ${rating.contentType === 'notes' ? 'note' : 'video'} "${content.title}" with ${rating.rating} stars.`,
+            contentId: rating.contentId,
+            contentType: rating.contentType,
+            fromUser: rating.userId,
+            fromUserName: rating.userName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying content owner of rating:', error);
+    }
+  }
+
+  // ==================== REPORT OPERATIONS ====================
+
+  async createReport(report: InsertReport): Promise<string> {
+    try {
+      const reportRef = push(ref(database, 'reports'));
+      const reportData: Report = {
+        ...report,
+        id: reportRef.key!,
+        status: 'pending',
+        createdAt: Date.now(),
+      };
+      await set(reportRef, reportData);
+      
+      // Notify admins of the new report
+      await this.notifyAdminsOfReport(reportData);
+      
+      return reportRef.key!;
+    } catch (error) {
+      console.error('Error creating report:', error);
+      throw error;
+    }
+  }
+
+  async getReports(status?: 'pending' | 'reviewed' | 'resolved' | 'dismissed'): Promise<Report[]> {
+    try {
+      const snap = await get(ref(database, 'reports'));
+      const val = snap.val();
+      if (!val) return [];
+      
+      let reports: Report[] = Object.entries(val as Record<string, any>).map(([id, data]) => ({
+        id,
+        contentId: data.contentId,
+        contentType: data.contentType,
+        semester: data.semester,
+        subjectId: data.subjectId,
+        contentTitle: data.contentTitle,
+        contentUploadedBy: data.contentUploadedBy,
+        reportedBy: data.reportedBy,
+        reporterName: data.reporterName,
+        reporterEmail: data.reporterEmail,
+        reason: data.reason,
+        description: data.description,
+        status: data.status || 'pending',
+        adminNotes: data.adminNotes,
+        reviewedBy: data.reviewedBy,
+        reviewedAt: data.reviewedAt,
+        createdAt: data.createdAt,
+      }));
+      
+      if (status) {
+        reports = reports.filter(r => r.status === status);
+      }
+      
+      return reports.sort((a, b) => b.createdAt - a.createdAt);
+    } catch (error) {
+      console.error('Error getting reports:', error);
+      return [];
+    }
+  }
+
+  async updateReportStatus(
+    reportId: string, 
+    status: 'reviewed' | 'resolved' | 'dismissed',
+    adminNotes?: string,
+    reviewedBy?: string,
+    reviewedByName?: string
+  ): Promise<void> {
+    try {
+      const updates: Record<string, any> = {
+        status,
+        reviewedAt: Date.now(),
+      };
+      if (adminNotes) updates.adminNotes = adminNotes;
+      if (reviewedBy) updates.reviewedBy = reviewedBy;
+      
+      const reportRef = ref(database, `reports/${reportId}`);
+      const snap = await get(reportRef);
+      const current = snap.val();
+      
+      await set(reportRef, { ...current, ...updates });
+      
+      // Notify the reporter about the status change
+      if (current?.reportedBy) {
+        const allUsers = await this.getAllUsers();
+        const reporter = allUsers.find(u => u.uid === current.reportedBy || u.email === current.reportedBy);
+        
+        if (reporter) {
+          const statusMessages: Record<string, string> = {
+            reviewed: 'is being reviewed by our team',
+            resolved: 'has been resolved. Thank you for helping keep our content clean!',
+            dismissed: 'has been reviewed and no action was required',
+          };
+          
+          await this.createNotification({
+            userId: reporter.uid,
+            type: 'content_reported',
+            title: 'Report Status Updated',
+            message: `Your report on "${current.contentTitle}" ${statusMessages[status]}.`,
+            contentId: current.contentId,
+            contentType: current.contentType,
+          });
+        }
+      }
+      
+      // Notify other admins about the report review
+      await this.notifyAdminsOfReportReview({
+        report: current,
+        status,
+        reviewedBy,
+        reviewedByName,
+        adminNotes,
+      });
+    } catch (error) {
+      console.error('Error updating report status:', error);
+      throw error;
+    }
+  }
+  
+  // Notify other admins when a report is reviewed
+  private async notifyAdminsOfReportReview(params: {
+    report: Report;
+    status: string;
+    reviewedBy?: string;
+    reviewedByName?: string;
+    adminNotes?: string;
+  }): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      const reviewerDisplay = params.reviewedByName || params.reviewedBy || 'An admin';
+      const statusDisplay = params.status === 'resolved' ? 'resolved' : params.status === 'dismissed' ? 'dismissed' : 'reviewed';
+      
+      for (const admin of admins) {
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        // Don't notify the reviewer themselves
+        if (adminUser && adminUser.uid !== params.reviewedBy) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'report_reviewed',
+            title: 'Report Reviewed',
+            message: `${reviewerDisplay} ${statusDisplay} a report on "${params.report.contentTitle}" (${params.report.reason}).${params.adminNotes ? ` Notes: ${params.adminNotes}` : ''}`,
+            contentId: params.report.contentId,
+            contentType: params.report.contentType,
+            fromUser: params.reviewedBy,
+            fromUserName: params.reviewedByName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of report review:', error);
+    }
+  }
+
+  async deleteReport(reportId: string): Promise<void> {
+    try {
+      await remove(ref(database, `reports/${reportId}`));
+    } catch (error) {
+      console.error('Error deleting report:', error);
+      throw error;
+    }
+  }
+
+  async hasUserReportedContent(userId: string, contentId: string): Promise<boolean> {
+    try {
+      const reports = await this.getReports();
+      return reports.some(r => r.reportedBy === userId && r.contentId === contentId);
+    } catch (error) {
+      console.error('Error checking user report:', error);
+      return false;
+    }
+  }
+
+  private async notifyAdminsOfReport(report: Report): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      for (const admin of admins) {
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        if (adminUser) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'content_reported',
+            title: 'New Content Report',
+            message: `"${report.contentTitle}" was reported for: ${report.reason}${report.description ? ` - "${report.description}"` : ''}`,
+            contentId: report.contentId,
+            contentType: report.contentType,
+            fromUser: report.reportedBy,
+            fromUserName: report.reporterName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of report:', error);
+    }
+  }
+
+  // Get pending reports count for admin badge
+  async getPendingReportsCount(): Promise<number> {
+    try {
+      const reports = await this.getReports('pending');
+      return reports.length;
+    } catch (error) {
+      console.error('Error getting pending reports count:', error);
+      return 0;
     }
   }
 

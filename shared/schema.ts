@@ -35,6 +35,93 @@ export const videoSchema = z.object({
   category: z.enum(["notes", "videos"]).default("videos"),
 });
 
+// Pending submission schema for user-submitted content awaiting approval
+export const pendingSubmissionSchema = z.object({
+  id: z.string(),
+  semester: z.string(),
+  subjectId: z.string(),
+  title: z.string(),
+  url: z.string(),
+  description: z.string().optional(),
+  contentType: z.enum(["notes", "videos"]),
+  submittedBy: z.string(), // user uid or email
+  submitterName: z.string().optional(),
+  submitterEmail: z.string().optional(),
+  submittedAt: z.number(),
+  expiresAt: z.number(), // auto-delete after 30 days
+  status: z.enum(["pending", "approved", "rejected"]).default("pending"),
+});
+
+// Notification schema for user notifications
+export const notificationSchema = z.object({
+  id: z.string(),
+  userId: z.string(), // recipient user id
+  type: z.enum([
+    "submission_pending",      // When user submits content
+    "submission_approved",     // When admin approves content
+    "submission_rejected",     // When admin rejects content
+    "content_rated",           // When someone rates your content
+    "content_reported",        // When your content is reported (for admins)
+    "pending_approval",        // Notify admins of new pending submissions
+    "admin_added",             // When a new admin is added
+    "admin_removed",           // When an admin is removed
+    "report_reviewed",         // When another admin reviews a report
+    "content_approved",        // When an admin approves content (notify other admins)
+    "admin_content_added",     // When an admin directly adds content
+  ]),
+  title: z.string(),
+  message: z.string(),
+  contentId: z.string().optional(), // Related content ID
+  contentType: z.enum(["notes", "videos"]).optional(),
+  fromUser: z.string().optional(), // Who triggered the notification
+  fromUserName: z.string().optional(),
+  read: z.boolean().default(false),
+  createdAt: z.number(),
+});
+
+// Rating schema for content ratings
+export const ratingSchema = z.object({
+  id: z.string(),
+  contentId: z.string(),
+  contentType: z.enum(["notes", "videos"]),
+  semester: z.string(),
+  subjectId: z.string(),
+  userId: z.string(),
+  userName: z.string().optional(),
+  rating: z.number().min(1).max(5), // 1-5 stars
+  createdAt: z.number(),
+  updatedAt: z.number().optional(),
+});
+
+// Report schema for content reports
+export const reportSchema = z.object({
+  id: z.string(),
+  contentId: z.string(),
+  contentType: z.enum(["notes", "videos"]),
+  semester: z.string(),
+  subjectId: z.string(),
+  contentTitle: z.string(),
+  contentUploadedBy: z.string().optional(),
+  reportedBy: z.string(),
+  reporterName: z.string().optional(),
+  reporterEmail: z.string().optional(),
+  reason: z.enum([
+    "inappropriate",
+    "spam",
+    "copyright",
+    "incorrect_info",
+    "broken_link",
+    "duplicate",
+    "other"
+  ]),
+  description: z.string().optional(),
+  status: z.enum(["pending", "reviewed", "resolved", "dismissed"]).default("pending"),
+  adminNotes: z.string().optional(),
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.number().optional(),
+  createdAt: z.number(),
+});
+
 export const userSchema = z.object({
   uid: z.string(),
   email: z.string(),
@@ -46,16 +133,59 @@ export const userSchema = z.object({
 export const insertNoteSchema = noteSchema.omit({ id: true, timestamp: true, downloads: true });
 export const insertVideoSchema = videoSchema.omit({ id: true, timestamp: true, views: true });
 export const insertUserSchema = userSchema.omit({ uid: true });
+export const insertPendingSubmissionSchema = pendingSubmissionSchema.omit({ id: true, submittedAt: true, expiresAt: true, status: true });
+export const insertNotificationSchema = notificationSchema.omit({ id: true, createdAt: true, read: true });
+export const insertRatingSchema = ratingSchema.omit({ id: true, createdAt: true, updatedAt: true });
+export const insertReportSchema = reportSchema.omit({ id: true, createdAt: true, status: true, adminNotes: true, reviewedBy: true, reviewedAt: true });
 
 export type Subject = z.infer<typeof subjectSchema>;
 export type Note = z.infer<typeof noteSchema>;
 export type Video = z.infer<typeof videoSchema>;
 export type User = z.infer<typeof userSchema>;
+export type PendingSubmission = z.infer<typeof pendingSubmissionSchema>;
+export type AppNotification = z.infer<typeof notificationSchema>;
+export type Rating = z.infer<typeof ratingSchema>;
+export type Report = z.infer<typeof reportSchema>;
 export type InsertNote = z.infer<typeof insertNoteSchema>;
 export type InsertVideo = z.infer<typeof insertVideoSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type InsertPendingSubmission = z.infer<typeof insertPendingSubmissionSchema>;
+export type InsertAppNotification = z.infer<typeof insertNotificationSchema>;
+export type InsertRating = z.infer<typeof insertRatingSchema>;
+export type InsertReport = z.infer<typeof insertReportSchema>;
 
 export type ContentItem = Note | Video;
+
+// Scheme schema for curriculum versions (e.g., 2019, 2024, etc.)
+export const schemeSchema = z.object({
+  id: z.string(),
+  name: z.string(), // e.g., "2019 Scheme", "2024 Scheme"
+  year: z.number(),
+  description: z.string().optional(),
+  isDefault: z.boolean().default(false),
+  createdAt: z.number(),
+  createdBy: z.string().optional(),
+});
+
+export type Scheme = z.infer<typeof schemeSchema>;
+export const insertSchemeSchema = schemeSchema.omit({ id: true, createdAt: true });
+export type InsertScheme = z.infer<typeof insertSchemeSchema>;
+
+// Available schemes list
+export const DEFAULT_SCHEMES = [
+  { id: "2019", name: "2019 Scheme", year: 2019, isDefault: true, description: "KTU 2019 Curriculum" }
+];
+
+// Report reason labels for UI display
+export const REPORT_REASON_LABELS: Record<Report['reason'], string> = {
+  inappropriate: "Inappropriate Content",
+  spam: "Spam or Misleading",
+  copyright: "Copyright Violation",
+  incorrect_info: "Incorrect Information",
+  broken_link: "Broken or Invalid Link",
+  duplicate: "Duplicate Content",
+  other: "Other Issue",
+};
 
 // Semester data structure
 export const SEMESTERS = {
