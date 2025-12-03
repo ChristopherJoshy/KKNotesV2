@@ -16,6 +16,14 @@ const PENDING_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
 // Current scheme (defaults to 2019)
 let currentScheme = "2019";
 
+// Subject type for admin management
+interface SubjectData {
+  id: string;
+  name: string;
+  code?: string;
+  credit?: number;
+}
+
 export class FirebaseService {
   // Scheme Management
   getCurrentScheme(): string {
@@ -109,12 +117,148 @@ export class FirebaseService {
     }
   }
 
-  // Get the database path based on current scheme
-  private getSchemeBasePath(basePath: string): string {
-    if (currentScheme === "2019") {
+  // Get the database path based on scheme
+  private getSchemeBasePath(basePath: string, scheme?: string): string {
+    const schemeToUse = scheme || currentScheme;
+    if (schemeToUse === "2019") {
       return basePath; // Default paths for 2019 scheme
     }
-    return `${basePath}_${currentScheme}`;
+    return `${basePath}_${schemeToUse}`;
+  }
+
+  // ==================== SUBJECT MANAGEMENT (Admin Only) ====================
+  
+  async createSubject(semester: string, subject: SubjectData, scheme?: string): Promise<string> {
+    try {
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('subjects', schemeToUse);
+      const subjectRef = ref(database, `${basePath}/${semester}/${subject.id}`);
+      
+      await set(subjectRef, {
+        name: subject.name,
+        code: subject.code || '',
+        credit: subject.credit || 0,
+        grade: '',
+        notes: [],
+        videos: [],
+      });
+      
+      return subject.id;
+    } catch (error) {
+      console.error('Error creating subject:', error);
+      throw error;
+    }
+  }
+
+  async updateSubjectDetails(semester: string, subjectId: string, updates: Partial<SubjectData>, scheme?: string): Promise<void> {
+    try {
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('subjects', schemeToUse);
+      const subjectRef = ref(database, `${basePath}/${semester}/${subjectId}`);
+      const snapshot = await get(subjectRef);
+      const currentData = snapshot.val() || {};
+      
+      await set(subjectRef, { 
+        ...currentData, 
+        name: updates.name ?? currentData.name,
+        code: updates.code ?? currentData.code,
+        credit: updates.credit ?? currentData.credit,
+      });
+    } catch (error) {
+      console.error('Error updating subject:', error);
+      throw error;
+    }
+  }
+
+  async deleteSubject(semester: string, subjectId: string, scheme?: string): Promise<void> {
+    try {
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('subjects', schemeToUse);
+      
+      // Delete the subject
+      await remove(ref(database, `${basePath}/${semester}/${subjectId}`));
+      
+      // Also delete all notes and videos for this subject
+      const notesPath = this.getSchemeBasePath('notes', schemeToUse);
+      const videosPath = this.getSchemeBasePath('videos', schemeToUse);
+      await remove(ref(database, `${notesPath}/${semester}/${subjectId}`));
+      await remove(ref(database, `${videosPath}/${semester}/${subjectId}`));
+    } catch (error) {
+      console.error('Error deleting subject:', error);
+      throw error;
+    }
+  }
+
+  async getSubjectsForScheme(semester: string, scheme: string): Promise<Record<string, Subject>> {
+    try {
+      const basePath = this.getSchemeBasePath('subjects', scheme);
+      const subjectsRef = ref(database, `${basePath}/${semester}`);
+      const snapshot = await get(subjectsRef);
+      const data = snapshot.val();
+
+      if (!data) return {};
+
+      // Handle array or object shapes
+      if (Array.isArray(data)) {
+        const map: Record<string, Subject> = {};
+        data.forEach((entry: any) => {
+          if (!entry || !entry.key) return;
+          const id = entry.key;
+          map[id] = {
+            name: entry.name || id,
+            credit: entry.credit || 0,
+            grade: "",
+            notes: [],
+            videos: [],
+          } as Subject;
+        });
+        return map;
+      }
+
+      const result: Record<string, Subject> = {};
+      Object.entries(data as Record<string, any>).forEach(([id, value]) => {
+        if (!value) return;
+        if (typeof value === "object" && "name" in value) {
+          result[id] = {
+            name: value.name,
+            credit: value.credit ?? 0,
+            grade: value.grade ?? "",
+            notes: Array.isArray(value.notes) ? value.notes : [],
+            videos: Array.isArray(value.videos) ? value.videos : [],
+          };
+        } else {
+          result[id] = {
+            name: value.name || value.title || id,
+            credit: value.credit ?? 0,
+            grade: value.grade ?? "",
+            notes: [],
+            videos: [],
+          } as Subject;
+        }
+      });
+      return result;
+    } catch (error) {
+      console.error('Error getting subjects for scheme:', error);
+      return {};
+    }
+  }
+
+  async copySubjectsFromScheme(fromScheme: string, toScheme: string): Promise<void> {
+    try {
+      const semesters = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'];
+      
+      for (const semester of semesters) {
+        const subjects = await this.getSubjectsForScheme(semester, fromScheme);
+        const toBasePath = this.getSchemeBasePath('subjects', toScheme);
+        
+        for (const [id, subject] of Object.entries(subjects)) {
+          await set(ref(database, `${toBasePath}/${semester}/${id}`), subject);
+        }
+      }
+    } catch (error) {
+      console.error('Error copying subjects between schemes:', error);
+      throw error;
+    }
   }
 
   // Admin helpers
@@ -300,19 +444,22 @@ export class FirebaseService {
   // Notes operations
   async createNote(note: InsertNote, file?: File, addedByAdmin?: { uid: string; name?: string; email?: string }): Promise<string> {
     try {
+      const scheme = (note as any).scheme || currentScheme;
       // If a file is provided, upload to Storage; otherwise, use provided URL
       let finalUrl = note.url;
       if (file) {
-        const fileRef = storageRef(storage, `notes/${note.semester}/${note.subjectId}/${Date.now()}_${file.name}`);
+        const fileRef = storageRef(storage, `notes/${scheme}/${note.semester}/${note.subjectId}/${Date.now()}_${file.name}`);
         const snapshot = await uploadBytes(fileRef, file);
         finalUrl = await getDownloadURL(snapshot.ref);
       }
 
       // Create note record in Realtime Database under nested path with finalUrl
-      const noteRef = push(ref(database, `notes/${note.semester}/${note.subjectId}`));
+      const basePath = this.getSchemeBasePath('notes', scheme);
+      const noteRef = push(ref(database, `${basePath}/${note.semester}/${note.subjectId}`));
       const noteData: Note = {
         ...note,
         id: noteRef.key!,
+        scheme,
         url: finalUrl || "",
         timestamp: Date.now(),
         downloads: 0,
@@ -338,10 +485,12 @@ export class FirebaseService {
     }
   }
 
-  async deleteNote(noteId: string, semester: string, subjectId: string): Promise<void> {
+  async deleteNote(noteId: string, semester: string, subjectId: string, scheme?: string): Promise<void> {
     try {
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('notes', schemeToUse);
       // Get note data first from nested path
-      const noteRef = ref(database, `notes/${semester}/${subjectId}/${noteId}`);
+      const noteRef = ref(database, `${basePath}/${semester}/${subjectId}/${noteId}`);
       const noteSnapshot = await get(noteRef);
       const noteData = noteSnapshot.val() as Note;
 
@@ -363,13 +512,16 @@ export class FirebaseService {
     }
   }
 
-  async getNotesBySubject(semester: string, subjectId: string): Promise<Note[]> {
+  async getNotesBySubject(semester: string, subjectId: string, scheme?: string): Promise<Note[]> {
     try {
-      const notesRef = ref(database, `notes/${semester}/${subjectId}`);
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('notes', schemeToUse);
+      const notesRef = ref(database, `${basePath}/${semester}/${subjectId}`);
       const snapshot = await get(notesRef);
       const byKey = snapshot.val() || {};
       const notes: Note[] = Object.entries(byKey).map(([id, val]: [string, any]) => ({
         id,
+        scheme: schemeToUse,
         semester,
         subjectId,
         title: (val && val.title) || id,
@@ -387,13 +539,16 @@ export class FirebaseService {
     }
   }
 
-  async getVideosBySubject(semester: string, subjectId: string): Promise<Video[]> {
+  async getVideosBySubject(semester: string, subjectId: string, scheme?: string): Promise<Video[]> {
     try {
-      const videosRef = ref(database, `videos/${semester}/${subjectId}`);
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('videos', schemeToUse);
+      const videosRef = ref(database, `${basePath}/${semester}/${subjectId}`);
       const snapshot = await get(videosRef);
       const byKey = snapshot.val() || {};
       const videos: Video[] = Object.entries(byKey).map(([id, val]: [string, any]) => ({
         id,
+        scheme: schemeToUse,
         semester,
         subjectId,
         title: (val && val.title) || id,
@@ -413,11 +568,14 @@ export class FirebaseService {
 
   async createVideo(video: InsertVideo, addedByAdmin?: { uid: string; name?: string; email?: string }): Promise<string> {
     try {
+      const scheme = (video as any).scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('videos', scheme);
       // Create video record in Realtime Database under nested path
-      const videoRef = push(ref(database, `videos/${video.semester}/${video.subjectId}`));
+      const videoRef = push(ref(database, `${basePath}/${video.semester}/${video.subjectId}`));
       const videoData: Video = {
         ...video,
         id: videoRef.key!,
+        scheme,
         timestamp: Date.now(),
         views: 0,
         category: "videos",
@@ -475,9 +633,11 @@ export class FirebaseService {
     }
   }
 
-  async deleteVideo(videoId: string, semester: string, subjectId: string): Promise<void> {
+  async deleteVideo(videoId: string, semester: string, subjectId: string, scheme?: string): Promise<void> {
     try {
-      const videoRef = ref(database, `videos/${semester}/${subjectId}/${videoId}`);
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('videos', schemeToUse);
+      const videoRef = ref(database, `${basePath}/${semester}/${subjectId}/${videoId}`);
       await remove(videoRef);
     } catch (error) {
       console.error('Error deleting video:', error);
@@ -493,6 +653,7 @@ export class FirebaseService {
       const pendingData: PendingSubmission = {
         ...submission,
         id: pendingRef.key!,
+        scheme: (submission as any).scheme || currentScheme,
         submittedAt: now,
         expiresAt: now + PENDING_EXPIRY_MS, // 30 days from now
         status: "pending",
@@ -525,6 +686,7 @@ export class FirebaseService {
         
         submissions.push({
           id,
+          scheme: data.scheme || '2019',
           semester: data.semester,
           subjectId: data.subjectId,
           title: data.title,
@@ -557,6 +719,8 @@ export class FirebaseService {
         throw new Error('Submission not found');
       }
       
+      const scheme = submission.scheme || currentScheme;
+      
       // Create the actual content based on type
       if (submission.contentType === 'notes') {
         await this.createNote({
@@ -567,7 +731,8 @@ export class FirebaseService {
           url: submission.url,
           uploadedBy: submission.submittedBy,
           category: 'notes',
-        });
+          scheme,
+        } as any);
       } else {
         await this.createVideo({
           semester: submission.semester,
@@ -577,7 +742,8 @@ export class FirebaseService {
           url: submission.url,
           uploadedBy: submission.submittedBy,
           category: 'videos',
-        });
+          scheme,
+        } as any);
       }
       
       // Notify the submitter that their content was approved
@@ -930,6 +1096,7 @@ export class FirebaseService {
             if (ratingData.userId === userId) {
               return {
                 id: ratingId,
+                scheme: ratingData.scheme || currentScheme,
                 contentId,
                 contentType,
                 semester,
@@ -959,6 +1126,7 @@ export class FirebaseService {
       
       return Object.entries(val as Record<string, any>).map(([id, data]) => ({
         id,
+        scheme: data.scheme || currentScheme,
         contentId,
         contentType,
         semester,
@@ -1052,6 +1220,7 @@ export class FirebaseService {
       
       let reports: Report[] = Object.entries(val as Record<string, any>).map(([id, data]) => ({
         id,
+        scheme: data.scheme || currentScheme,
         contentId: data.contentId,
         contentType: data.contentType,
         semester: data.semester,
@@ -1233,11 +1402,15 @@ export class FirebaseService {
   /**
    * Fetch all notes and videos for a semester with only two reads, and flatten to ContentItem[]
    */
-  async getAllContentForSemester(semester: string): Promise<ContentItem[]> {
+  async getAllContentForSemester(semester: string, scheme?: string): Promise<ContentItem[]> {
     try {
+      const schemeToUse = scheme || currentScheme;
+      const notesPath = this.getSchemeBasePath('notes', schemeToUse);
+      const videosPath = this.getSchemeBasePath('videos', schemeToUse);
+      
       const [notesSnap, videosSnap] = await Promise.all([
-        get(ref(database, `notes/${semester}`)),
-        get(ref(database, `videos/${semester}`)),
+        get(ref(database, `${notesPath}/${semester}`)),
+        get(ref(database, `${videosPath}/${semester}`)),
       ]);
 
       const results: ContentItem[] = [];
@@ -1249,6 +1422,7 @@ export class FirebaseService {
           if (!val) return;
           results.push({
             id,
+            scheme: schemeToUse,
             semester,
             subjectId,
             title: val.title || id,
@@ -1269,6 +1443,7 @@ export class FirebaseService {
           if (!val) return;
           results.push({
             id,
+            scheme: schemeToUse,
             semester,
             subjectId,
             title: val.title || id,
@@ -1295,7 +1470,7 @@ export class FirebaseService {
    */
   async updateContent(
     item: ContentItem,
-    updates: Partial<{ semester: string; subjectId: string; category: 'notes' | 'videos'; title: string; description: string; url: string }>
+    updates: Partial<{ scheme: string; semester: string; subjectId: string; category: 'notes' | 'videos'; title: string; description: string; url: string }>
   ): Promise<void> {
     const fromCategory = item.category;
     const toCategory = updates.category || fromCategory;
@@ -1303,9 +1478,12 @@ export class FirebaseService {
     const toSem = updates.semester || fromSem;
     const fromSubject = item.subjectId;
     const toSubject = updates.subjectId || fromSubject;
+    const fromScheme = (item as any).scheme || currentScheme;
+    const toScheme = updates.scheme || fromScheme;
 
     // read current snapshot to merge counters and existing fields
-    const fromPath = `${fromCategory}/${fromSem}/${fromSubject}/${item.id}`;
+    const fromBasePath = this.getSchemeBasePath(fromCategory, fromScheme);
+    const fromPath = `${fromBasePath}/${fromSem}/${fromSubject}/${item.id}`;
     const snap = await get(ref(database, fromPath));
     const current = (snap.val() || {}) as any;
 
@@ -1313,6 +1491,7 @@ export class FirebaseService {
     if (toCategory === 'notes') {
       const newNote: Note = {
         id: item.id,
+        scheme: toScheme,
         semester: toSem,
         subjectId: toSubject,
         title: updates.title ?? item.title,
@@ -1323,11 +1502,13 @@ export class FirebaseService {
         downloads: typeof current.downloads === 'number' ? current.downloads : (item as any).downloads || 0,
         category: 'notes',
       };
-      const toPath = `notes/${toSem}/${toSubject}/${item.id}`;
+      const toBasePath = this.getSchemeBasePath('notes', toScheme);
+      const toPath = `${toBasePath}/${toSem}/${toSubject}/${item.id}`;
       await set(ref(database, toPath), newNote);
     } else {
       const newVideo: Video = {
         id: item.id,
+        scheme: toScheme,
         semester: toSem,
         subjectId: toSubject,
         title: updates.title ?? item.title,
@@ -1338,19 +1519,22 @@ export class FirebaseService {
         views: typeof current.views === 'number' ? current.views : (item as any).views || 0,
         category: 'videos',
       };
-      const toPath = `videos/${toSem}/${toSubject}/${item.id}`;
+      const toBasePath = this.getSchemeBasePath('videos', toScheme);
+      const toPath = `${toBasePath}/${toSem}/${toSubject}/${item.id}`;
       await set(ref(database, toPath), newVideo);
     }
 
-    // Remove from old location if path or category changed
-    if (fromCategory !== toCategory || fromSem !== toSem || fromSubject !== toSubject) {
-      await remove(ref(database, `${fromCategory}/${fromSem}/${fromSubject}/${item.id}`));
+    // Remove from old location if path, category, or scheme changed
+    if (fromCategory !== toCategory || fromSem !== toSem || fromSubject !== toSubject || fromScheme !== toScheme) {
+      await remove(ref(database, fromPath));
     }
   }
 
-  async incrementDownload(item: { id: string; semester: string; subjectId: string }): Promise<void> {
+  async incrementDownload(item: { id: string; semester: string; subjectId: string; scheme?: string }): Promise<void> {
     try {
-    const path = `notes/${item.semester}/${item.subjectId}/${item.id}`;
+      const schemeToUse = item.scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('notes', schemeToUse);
+    const path = `${basePath}/${item.semester}/${item.subjectId}/${item.id}`;
     const noteRef = ref(database, path);
     const snapshot = await get(noteRef);
     const noteData = snapshot.val() as any;
@@ -1361,9 +1545,11 @@ export class FirebaseService {
     }
   }
 
-  async incrementView(item: { id: string; semester: string; subjectId: string }): Promise<void> {
+  async incrementView(item: { id: string; semester: string; subjectId: string; scheme?: string }): Promise<void> {
     try {
-    const path = `videos/${item.semester}/${item.subjectId}/${item.id}`;
+      const schemeToUse = item.scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('videos', schemeToUse);
+    const path = `${basePath}/${item.semester}/${item.subjectId}/${item.id}`;
     const videoRef = ref(database, path);
     const snapshot = await get(videoRef);
     const videoData = snapshot.val() as any;
@@ -1471,9 +1657,11 @@ export class FirebaseService {
   }
 
   // Subject operations
-  async getSubjects(semester: string): Promise<Record<string, Subject>> {
+  async getSubjects(semester: string, scheme?: string): Promise<Record<string, Subject>> {
     try {
-      const subjectsRef = ref(database, `subjects/${semester}`);
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('subjects', schemeToUse);
+      const subjectsRef = ref(database, `${basePath}/${semester}`);
       const snapshot = await get(subjectsRef);
       const data = snapshot.val();
 
@@ -1534,9 +1722,11 @@ export class FirebaseService {
     }
   }
 
-  async updateSubject(semester: string, subjectId: string, subject: Partial<Subject>): Promise<void> {
+  async updateSubject(semester: string, subjectId: string, subject: Partial<Subject>, scheme?: string): Promise<void> {
     try {
-      const subjectRef = ref(database, `subjects/${semester}/${subjectId}`);
+      const schemeToUse = scheme || currentScheme;
+      const basePath = this.getSchemeBasePath('subjects', schemeToUse);
+      const subjectRef = ref(database, `${basePath}/${semester}/${subjectId}`);
       const snapshot = await get(subjectRef);
       const currentData = snapshot.val() || {};
       await set(subjectRef, { ...currentData, ...subject });
@@ -1562,11 +1752,14 @@ export class FirebaseService {
   }
 
   // Realtime listeners
-  onContentChange(semester: string, subjectId: string, category: "all" | "notes" | "videos", callback: (content: ContentItem[]) => void): () => void {
+  onContentChange(semester: string, subjectId: string, category: "all" | "notes" | "videos", callback: (content: ContentItem[]) => void, scheme?: string): () => void {
+    const schemeToUse = scheme || currentScheme;
     // In the provided DB, notes and videos are under /notes/<sem>/<subjectKey> and /videos/<sem>/<subjectKey>
     const paths: Array<{ type: "notes" | "videos"; refPath: string }> = [];
-  if (category === "all" || category === "notes") paths.push({ type: "notes", refPath: `notes/${semester}/${subjectId}` });
-  if (category === "all" || category === "videos") paths.push({ type: "videos", refPath: `videos/${semester}/${subjectId}` });
+    const notesBasePath = this.getSchemeBasePath('notes', schemeToUse);
+    const videosBasePath = this.getSchemeBasePath('videos', schemeToUse);
+  if (category === "all" || category === "notes") paths.push({ type: "notes", refPath: `${notesBasePath}/${semester}/${subjectId}` });
+  if (category === "all" || category === "videos") paths.push({ type: "videos", refPath: `${videosBasePath}/${semester}/${subjectId}` });
 
     let unsubscribers: Array<() => void> = [];
     const aggregateAndEmit = async () => {
@@ -1580,6 +1773,7 @@ export class FirebaseService {
       if (p.type === "notes") {
               combined.push({
                 id,
+                scheme: schemeToUse,
                 semester,
                 subjectId,
                 title: val.title || id,
@@ -1593,6 +1787,7 @@ export class FirebaseService {
             } else {
               combined.push({
                 id,
+                scheme: schemeToUse,
                 semester,
                 subjectId,
                 title: val.title || id,
@@ -1629,13 +1824,16 @@ export class FirebaseService {
     };
   }
 
-  onNotesChange(semester: string, subjectId: string, callback: (notes: Note[]) => void): () => void {
-    const notesRef = ref(database, `notes/${semester}/${subjectId}`);
+  onNotesChange(semester: string, subjectId: string, callback: (notes: Note[]) => void, scheme?: string): () => void {
+    const schemeToUse = scheme || currentScheme;
+    const basePath = this.getSchemeBasePath('notes', schemeToUse);
+    const notesRef = ref(database, `${basePath}/${semester}/${subjectId}`);
 
     const listener = async (snapshot: any) => {
       const byKey = snapshot.val() || {};
       const notes: Note[] = Object.entries(byKey).map(([id, val]: [string, any]) => ({
         id,
+        scheme: schemeToUse,
         semester,
         subjectId,
         title: (val && val.title) || id,
@@ -1690,6 +1888,7 @@ export class FirebaseService {
    */
   async searchContent(searchParams: {
     query?: string;
+    scheme?: string;
     semester?: string;
     subject?: string;
     contentType?: "all" | "notes" | "videos";
@@ -1700,6 +1899,7 @@ export class FirebaseService {
     try {
       const {
         query = "",
+        scheme = currentScheme,
         semester = "all",
         subject = "all",
         contentType = "all",
@@ -1728,8 +1928,8 @@ export class FirebaseService {
       const perSemesterBatches = await Promise.all(
         semestersToSearch.map(async (sem) => {
           const [contentItems, subjectsMap] = await Promise.all([
-            this.getAllContentForSemester(sem),
-            this.getSubjects(sem),
+            this.getAllContentForSemester(sem, scheme),
+            this.getSubjects(sem, scheme),
           ]);
 
           // Map subject names for display/search
@@ -1787,13 +1987,14 @@ export class FirebaseService {
   /**
    * Get all available subjects across all semesters for search filtering
    */
-  async getAllSubjects(): Promise<Record<string, { name: string; semester: string }>> {
+  async getAllSubjects(scheme?: string): Promise<Record<string, { name: string; semester: string }>> {
     try {
+      const schemeToUse = scheme || currentScheme;
       const allSubjects: Record<string, { name: string; semester: string }> = {};
       const semesters = ['s1','s2','s3','s4','s5','s6','s7','s8'];
 
       for (const semester of semesters) {
-        const semesterSubjects = await this.getSubjects(semester);
+        const semesterSubjects = await this.getSubjects(semester, schemeToUse);
         Object.entries(semesterSubjects).forEach(([id, subject]) => {
           allSubjects[`${semester}-${id}`] = {
             name: subject.name,

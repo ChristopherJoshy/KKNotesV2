@@ -8,8 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { firebaseService } from "@/lib/firebaseAdmin";
-import { InsertNote, InsertVideo, Note, Video, User, ContentItem, PendingSubmission, Report, REPORT_REASON_LABELS } from "@shared/schema";
+import { InsertNote, InsertVideo, Note, Video, User, ContentItem, PendingSubmission, Report, REPORT_REASON_LABELS, Scheme } from "@shared/schema";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -32,8 +33,34 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   const { user } = useAuth();
   const isSuperAdmin = (user?.role || "").toLowerCase() === "superadmin";
 
+  // Scheme management state
+  const [schemes, setSchemes] = useState<Scheme[]>([]);
+  const [selectedScheme, setSelectedScheme] = useState<string>("2019");
+  const [loadingSchemes, setLoadingSchemes] = useState(false);
+  const [isCreateSchemeOpen, setIsCreateSchemeOpen] = useState(false);
+  const [newSchemeYear, setNewSchemeYear] = useState("");
+  const [newSchemeDescription, setNewSchemeDescription] = useState("");
+  const [creatingScheme, setCreatingScheme] = useState(false);
+  
+  // Subject management state
+  const [isAddSubjectOpen, setIsAddSubjectOpen] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState("");
+  const [newSubjectId, setNewSubjectId] = useState("");
+  const [newSubjectSemester, setNewSubjectSemester] = useState("");
+  const [addingSubject, setAddingSubject] = useState(false);
+  const [deletingSubjectId, setDeletingSubjectId] = useState<string | null>(null);
+  const [schemeSubjectsSemester, setSchemeSubjectsSemester] = useState<string>("s1");
+  const [schemeSubjects, setSchemeSubjects] = useState<Record<string, any>>({});
+  const [loadingSchemeSubjects, setLoadingSchemeSubjects] = useState(false);
+  
+  // Subject editing state
+  const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
+  const [editSubjectName, setEditSubjectName] = useState("");
+  const [savingSubject, setSavingSubject] = useState(false);
+
   // Content upload form
   const [uploadForm, setUploadForm] = useState({
+    scheme: "2019",
     semester: "",
     subjectId: "",
     title: "",
@@ -55,8 +82,8 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   const [removingAdminKey, setRemovingAdminKey] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ semester: string; subjectId: string; category: 'notes' | 'videos'; title: string; description: string; url?: string }>({
-    semester: '', subjectId: '', category: 'notes', title: '', description: '', url: ''
+  const [editForm, setEditForm] = useState<{ scheme: string; semester: string; subjectId: string; category: 'notes' | 'videos'; title: string; description: string; url?: string }>({
+    scheme: '2019', semester: '', subjectId: '', category: 'notes', title: '', description: '', url: ''
   });
   const [manageSemester, setManageSemester] = useState<string>('all');
   const [manageSubjectId, setManageSubjectId] = useState<string>('all');
@@ -69,6 +96,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   const [reportFilter, setReportFilter] = useState<'all' | 'pending' | 'reviewed' | 'resolved' | 'dismissed'>('pending');
 
   useEffect(() => {
+    loadSchemes();
     loadAllContent();
     loadPendingSubmissions();
     loadReports();
@@ -77,6 +105,143 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   loadAdmins();
     }
   }, [isSuperAdmin]);
+
+  // Load schemes
+  const loadSchemes = async () => {
+    setLoadingSchemes(true);
+    try {
+      const schemeList = await firebaseService.getSchemes();
+      setSchemes(schemeList);
+      if (schemeList.length > 0 && !selectedScheme) {
+        const defaultScheme = schemeList.find(s => s.isDefault) || schemeList[0];
+        setSelectedScheme(defaultScheme.id);
+        setUploadForm(prev => ({ ...prev, scheme: defaultScheme.id }));
+      }
+    } catch (error) {
+      console.error('Error loading schemes:', error);
+    } finally {
+      setLoadingSchemes(false);
+    }
+  };
+
+  // Create new scheme
+  const handleCreateScheme = async () => {
+    const year = parseInt(newSchemeYear);
+    if (!year || year < 2000 || year > 2100) {
+      toast({ title: "Invalid Year", description: "Please enter a valid year between 2000 and 2100.", variant: "destructive" });
+      return;
+    }
+    setCreatingScheme(true);
+    try {
+      await firebaseService.createScheme({
+        name: `${year} Scheme`,
+        year,
+        description: newSchemeDescription || `KTU ${year} Curriculum`,
+        isDefault: false,
+      });
+      toast({ title: "Scheme Created", description: `${year} Scheme has been created successfully.` });
+      setNewSchemeYear("");
+      setNewSchemeDescription("");
+      setIsCreateSchemeOpen(false);
+      await loadSchemes();
+    } catch (error: any) {
+      toast({ title: "Creation Failed", description: error?.message || "Failed to create scheme.", variant: "destructive" });
+    } finally {
+      setCreatingScheme(false);
+    }
+  };
+
+  // Load subjects for scheme management
+  const loadSchemeSubjects = async (semester: string, scheme: string) => {
+    setLoadingSchemeSubjects(true);
+    try {
+      const subjects = await firebaseService.getSubjects(semester, scheme);
+      setSchemeSubjects(subjects);
+    } catch (error) {
+      console.error('Error loading scheme subjects:', error);
+    } finally {
+      setLoadingSchemeSubjects(false);
+    }
+  };
+
+  // Handle scheme change in subject management
+  const handleSchemeSubjectsChange = async (scheme: string) => {
+    setSelectedScheme(scheme);
+    await loadSchemeSubjects(schemeSubjectsSemester, scheme);
+  };
+
+  // Handle semester change in subject management
+  const handleSchemeSubjectsSemesterChange = async (semester: string) => {
+    setSchemeSubjectsSemester(semester);
+    await loadSchemeSubjects(semester, selectedScheme);
+  };
+
+  // Add new subject
+  const handleAddSubject = async () => {
+    if (!newSubjectName.trim() || !newSubjectId.trim() || !newSubjectSemester) {
+      toast({ title: "Missing Information", description: "Please fill all required fields.", variant: "destructive" });
+      return;
+    }
+    setAddingSubject(true);
+    try {
+      await firebaseService.createSubject(newSubjectSemester, {
+        id: newSubjectId.trim(),
+        name: newSubjectName.trim(),
+      }, selectedScheme);
+      toast({ title: "Subject Added", description: `${newSubjectName} has been added to ${selectedScheme} scheme.` });
+      setNewSubjectName("");
+      setNewSubjectId("");
+      setNewSubjectSemester("");
+      setIsAddSubjectOpen(false);
+      await loadSchemeSubjects(schemeSubjectsSemester, selectedScheme);
+    } catch (error: any) {
+      toast({ title: "Failed to Add Subject", description: error?.message || "Try again.", variant: "destructive" });
+    } finally {
+      setAddingSubject(false);
+    }
+  };
+
+  // Delete subject
+  const handleDeleteSubject = async (subjectId: string) => {
+    setDeletingSubjectId(subjectId);
+    try {
+      await firebaseService.deleteSubject(schemeSubjectsSemester, subjectId, selectedScheme);
+      toast({ title: "Subject Deleted", description: "Subject and all its content have been removed." });
+      await loadSchemeSubjects(schemeSubjectsSemester, selectedScheme);
+    } catch (error: any) {
+      toast({ title: "Delete Failed", description: error?.message || "Try again.", variant: "destructive" });
+    } finally {
+      setDeletingSubjectId(null);
+    }
+  };
+
+  // Edit subject name
+  const handleEditSubject = (subjectId: string, currentName: string) => {
+    setEditingSubjectId(subjectId);
+    setEditSubjectName(currentName);
+  };
+
+  const handleSaveSubjectEdit = async () => {
+    if (!editingSubjectId || !editSubjectName.trim()) return;
+    
+    setSavingSubject(true);
+    try {
+      await firebaseService.updateSubjectDetails(schemeSubjectsSemester, editingSubjectId, { name: editSubjectName.trim() }, selectedScheme);
+      toast({ title: "Subject Updated", description: "Subject name has been updated." });
+      setEditingSubjectId(null);
+      setEditSubjectName("");
+      await loadSchemeSubjects(schemeSubjectsSemester, selectedScheme);
+    } catch (error: any) {
+      toast({ title: "Update Failed", description: error?.message || "Try again.", variant: "destructive" });
+    } finally {
+      setSavingSubject(false);
+    }
+  };
+
+  const handleCancelSubjectEdit = () => {
+    setEditingSubjectId(null);
+    setEditSubjectName("");
+  };
 
   const loadReports = async () => {
     setLoadingReports(true);
@@ -273,11 +438,12 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
     }
   };
 
-  const loadSubjects = async (semester: string) => {
+  const loadSubjects = async (semester: string, scheme?: string) => {
     try {
-      const semesterSubjects = await firebaseService.getSubjects(semester);
+      const schemeToUse = scheme || uploadForm.scheme;
+      const semesterSubjects = await firebaseService.getSubjects(semester, schemeToUse);
       setSubjects(semesterSubjects);
-  setSubjectsBySem(prev => ({ ...prev, [semester]: semesterSubjects }));
+  setSubjectsBySem(prev => ({ ...prev, [`${schemeToUse}:${semester}`]: semesterSubjects }));
     } catch (error) {
       console.error('Error loading subjects:', error);
       toast({
@@ -288,15 +454,22 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
     }
   };
 
-  const handleSemesterChange = (semester: string) => {
-    setUploadForm(prev => ({ ...prev, semester, subjectId: "" }));
-    loadSubjects(semester);
+  const handleSchemeChange = (scheme: string) => {
+    setUploadForm(prev => ({ ...prev, scheme, semester: "", subjectId: "" }));
+    setSubjects({});
   };
 
-  const ensureSubjects = async (semester: string) => {
-    if (!subjectsBySem[semester]) {
-      const s = await firebaseService.getSubjects(semester);
-      setSubjectsBySem(prev => ({ ...prev, [semester]: s }));
+  const handleSemesterChange = (semester: string) => {
+    setUploadForm(prev => ({ ...prev, semester, subjectId: "" }));
+    loadSubjects(semester, uploadForm.scheme);
+  };
+
+  const ensureSubjects = async (semester: string, scheme?: string) => {
+    const schemeToUse = scheme || uploadForm.scheme;
+    const key = `${schemeToUse}:${semester}`;
+    if (!subjectsBySem[key]) {
+      const s = await firebaseService.getSubjects(semester, schemeToUse);
+      setSubjectsBySem(prev => ({ ...prev, [key]: s }));
     }
   };
 
@@ -315,10 +488,10 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   // No file upload; using URL for both notes and videos
 
   const handleUpload = async () => {
-    if (!uploadForm.semester || !uploadForm.subjectId || !uploadForm.title) {
+    if (!uploadForm.scheme || !uploadForm.semester || !uploadForm.subjectId || !uploadForm.title) {
       toast({
         title: "Missing Information",
-        description: "Please fill all required fields",
+        description: "Please fill all required fields including scheme",
         variant: "destructive"
       });
       return;
@@ -336,7 +509,8 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
     setUploading(true);
     try {
       if (uploadForm.category === "notes") {
-        const noteData: InsertNote = {
+        const noteData: InsertNote & { scheme: string } = {
+          scheme: uploadForm.scheme,
           semester: uploadForm.semester,
           subjectId: uploadForm.subjectId,
           title: uploadForm.title,
@@ -346,9 +520,10 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
           category: "notes"
         };
 
-        await firebaseService.createNote(noteData);
+        await firebaseService.createNote(noteData as any);
       } else {
-        const videoData: InsertVideo = {
+        const videoData: InsertVideo & { scheme: string } = {
+          scheme: uploadForm.scheme,
           semester: uploadForm.semester,
           subjectId: uploadForm.subjectId,
           title: uploadForm.title,
@@ -358,7 +533,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
           category: "videos"
         };
 
-        await firebaseService.createVideo(videoData);
+        await firebaseService.createVideo(videoData as any);
       }
       
       toast({
@@ -371,6 +546,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
 
       // Reset form
       setUploadForm({
+        scheme: uploadForm.scheme,
         semester: "",
         subjectId: "",
         title: "",
@@ -537,6 +713,13 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                   <span className="hidden xs:inline">Manage</span>
                 </TabsTrigger>
                 <TabsTrigger 
+                  value="schemes" 
+                  className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  <i className="fas fa-graduation-cap mr-1.5 sm:mr-2"></i>
+                  <span className="hidden xs:inline">Schemes</span>
+                </TabsTrigger>
+                <TabsTrigger 
                   value="statistics" 
                   className="flex-1 sm:flex-none px-3 sm:px-6 text-xs sm:text-sm rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
                 >
@@ -585,10 +768,26 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                       </Select>
                     </div>
 
+                    <div>
+                      <Label className="text-xs sm:text-sm">Scheme *</Label>
+                      <Select value={uploadForm.scheme} onValueChange={handleSchemeChange}>
+                        <SelectTrigger data-testid="select-upload-scheme" className="mt-1.5">
+                          <SelectValue placeholder="Select scheme" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {schemes.map(scheme => (
+                            <SelectItem key={scheme.id} value={scheme.id}>
+                              {scheme.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <Label className="text-xs sm:text-sm">Semester</Label>
-                        <Select value={uploadForm.semester} onValueChange={handleSemesterChange}>
+                        <Select value={uploadForm.semester} onValueChange={handleSemesterChange} disabled={!uploadForm.scheme}>
                           <SelectTrigger data-testid="select-upload-semester" className="mt-1.5">
                             <SelectValue placeholder="Select semester" />
                           </SelectTrigger>
@@ -614,7 +813,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                           </SelectTrigger>
                           <SelectContent>
                             {Object.entries(subjects).map(([id, subject]) => (
-                              <SelectItem key={`${uploadForm.semester}:${id}`} value={id}>
+                              <SelectItem key={`${uploadForm.scheme}:${uploadForm.semester}:${id}`} value={id}>
                                 {subject.name}
                               </SelectItem>
                             ))}
@@ -1255,6 +1454,7 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                                   setEditItemId(item.id);
                                   await ensureSubjects(item.semester);
                                   setEditForm({
+                                    scheme: item.scheme || selectedScheme,
                                     semester: item.semester,
                                     subjectId: item.subjectId,
                                     category: item.category,
@@ -1275,6 +1475,273 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
                   </ScrollArea>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* Schemes & Subjects Tab */}
+            <TabsContent value="schemes" className="p-4 sm:p-6 mt-0">
+              <div className="space-y-6">
+                {/* Scheme Management */}
+                <Card className="border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-900/10">
+                  <CardHeader className="p-4 pb-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                        <i className="fas fa-graduation-cap text-purple-600"></i>
+                        Scheme Management
+                      </CardTitle>
+                      <Dialog open={isCreateSchemeOpen} onOpenChange={setIsCreateSchemeOpen}>
+                        <DialogTrigger asChild>
+                          <Button size="sm" className="gap-2">
+                            <i className="fas fa-plus"></i>
+                            New Scheme
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>Create New Scheme</DialogTitle>
+                            <DialogDescription>
+                              Add a new curriculum scheme. You can then add subjects to it.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-4 py-4">
+                            <div>
+                              <Label>Scheme Year *</Label>
+                              <Input
+                                type="number"
+                                placeholder="e.g., 2024"
+                                value={newSchemeYear}
+                                onChange={(e) => setNewSchemeYear(e.target.value)}
+                                className="mt-1.5"
+                                min={2000}
+                                max={2100}
+                              />
+                            </div>
+                            <div>
+                              <Label>Description (Optional)</Label>
+                              <Input
+                                placeholder="e.g., KTU 2024 Updated Curriculum"
+                                value={newSchemeDescription}
+                                onChange={(e) => setNewSchemeDescription(e.target.value)}
+                                className="mt-1.5"
+                              />
+                            </div>
+                          </div>
+                          <DialogFooter className="gap-2">
+                            <Button variant="outline" onClick={() => setIsCreateSchemeOpen(false)} disabled={creatingScheme}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleCreateScheme} disabled={creatingScheme || !newSchemeYear}>
+                              {creatingScheme ? "Creating..." : "Create Scheme"}
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-2">
+                    {loadingSchemes ? (
+                      <div className="text-sm text-muted-foreground py-4 text-center">Loading schemes...</div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {schemes.map(scheme => (
+                          <div key={scheme.id} className="p-4 border rounded-lg bg-card">
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="font-semibold">{scheme.name}</h4>
+                              {scheme.isDefault && <Badge variant="secondary" className="text-xs">Default</Badge>}
+                            </div>
+                            <p className="text-xs text-muted-foreground mb-2">{scheme.description}</p>
+                            <div className="text-xs text-muted-foreground">
+                              Created: {new Date(scheme.createdAt).toLocaleDateString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Subject Management */}
+                <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10">
+                  <CardHeader className="p-4 pb-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                        <i className="fas fa-book text-blue-600"></i>
+                        Subject Management
+                      </CardTitle>
+                      <Dialog open={isAddSubjectOpen} onOpenChange={setIsAddSubjectOpen}>
+                        <DialogTrigger asChild>
+                          <Button size="sm" className="gap-2">
+                            <i className="fas fa-plus"></i>
+                            Add Subject
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>Add New Subject</DialogTitle>
+                            <DialogDescription>
+                              Add a subject to the {selectedScheme} scheme.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-4 py-4">
+                            <div>
+                              <Label>Semester *</Label>
+                              <Select value={newSubjectSemester} onValueChange={setNewSubjectSemester}>
+                                <SelectTrigger className="mt-1.5">
+                                  <SelectValue placeholder="Select semester" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {SEMESTER_OPTIONS.map(opt => (
+                                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label>Subject ID *</Label>
+                              <Input
+                                placeholder="e.g., CS301"
+                                value={newSubjectId}
+                                onChange={(e) => setNewSubjectId(e.target.value)}
+                                className="mt-1.5"
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">Unique identifier (no spaces)</p>
+                            </div>
+                            <div>
+                              <Label>Subject Name *</Label>
+                              <Input
+                                placeholder="e.g., Data Structures"
+                                value={newSubjectName}
+                                onChange={(e) => setNewSubjectName(e.target.value)}
+                                className="mt-1.5"
+                              />
+                            </div>
+                          </div>
+                          <DialogFooter className="gap-2">
+                            <Button variant="outline" onClick={() => setIsAddSubjectOpen(false)} disabled={addingSubject}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleAddSubject} disabled={addingSubject || !newSubjectName || !newSubjectId || !newSubjectSemester}>
+                              {addingSubject ? "Adding..." : "Add Subject"}
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-2">
+                    {/* Scheme and Semester Selection */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      <div>
+                        <Label className="text-xs">Scheme</Label>
+                        <Select value={selectedScheme} onValueChange={handleSchemeSubjectsChange}>
+                          <SelectTrigger className="mt-1.5">
+                            <SelectValue placeholder="Select scheme" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {schemes.map(scheme => (
+                              <SelectItem key={scheme.id} value={scheme.id}>{scheme.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Semester</Label>
+                        <Select value={schemeSubjectsSemester} onValueChange={handleSchemeSubjectsSemesterChange}>
+                          <SelectTrigger className="mt-1.5">
+                            <SelectValue placeholder="Select semester" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {SEMESTER_OPTIONS.map(opt => (
+                              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Subject List */}
+                    {loadingSchemeSubjects ? (
+                      <div className="text-sm text-muted-foreground py-4 text-center">Loading subjects...</div>
+                    ) : Object.keys(schemeSubjects).length === 0 ? (
+                      <div className="text-center py-8">
+                        <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
+                          <i className="fas fa-book text-muted-foreground"></i>
+                        </div>
+                        <p className="text-sm text-muted-foreground">No subjects found for this semester.</p>
+                        <p className="text-xs text-muted-foreground mt-1">Click "Add Subject" to create one.</p>
+                      </div>
+                    ) : (
+                      <ScrollArea className="h-[300px]">
+                        <div className="space-y-2 pr-4">
+                          {Object.entries(schemeSubjects).map(([id, subject]) => (
+                            <div key={id} className="flex items-center justify-between p-3 border rounded-lg bg-card">
+                              {editingSubjectId === id ? (
+                                <>
+                                  <div className="flex-1 mr-2">
+                                    <Input
+                                      value={editSubjectName}
+                                      onChange={(e) => setEditSubjectName(e.target.value)}
+                                      className="h-8 text-sm"
+                                      placeholder="Subject name"
+                                      autoFocus
+                                    />
+                                    <div className="text-xs text-muted-foreground mt-1">ID: {id}</div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 text-xs"
+                                      onClick={handleSaveSubjectEdit}
+                                      disabled={savingSubject || !editSubjectName.trim()}
+                                    >
+                                      {savingSubject ? "..." : "Save"}
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8 text-xs"
+                                      onClick={handleCancelSubjectEdit}
+                                      disabled={savingSubject}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div>
+                                    <div className="font-medium text-sm">{(subject as any).name}</div>
+                                    <div className="text-xs text-muted-foreground">ID: {id}</div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 text-xs"
+                                      onClick={() => handleEditSubject(id, (subject as any).name)}
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-destructive hover:text-destructive h-8 text-xs"
+                                      onClick={() => handleDeleteSubject(id)}
+                                      disabled={deletingSubjectId === id}
+                                    >
+                                      {deletingSubjectId === id ? "..." : "Delete"}
+                                    </Button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             </TabsContent>
 
             {/* Statistics Tab */}

@@ -80,7 +80,7 @@ export default function Home() {
    */
   const loadAllSubjectsForSearch = async () => {
     try {
-      const subjects = await firebaseService.getAllSubjects();
+      const subjects = await firebaseService.getAllSubjects(selectedScheme);
       setAllSubjects(subjects);
     } catch (error) {
       console.error('Error loading subjects for search:', error);
@@ -93,7 +93,7 @@ export default function Home() {
     setSelectedSubjectId(null);
     
     try {
-      const semesterSubjects = await firebaseService.getSubjects(semester);
+      const semesterSubjects = await firebaseService.getSubjects(semester, selectedScheme);
       setSubjects(semesterSubjects);
     } catch (error) {
       console.error('Error loading subjects:', error);
@@ -143,7 +143,8 @@ export default function Home() {
         subject: filters.subject === "all" ? undefined : filters.subject,
         contentType: filters.contentType,
         sortBy: filters.sortBy,
-        sortOrder: filters.sortOrder
+        sortOrder: filters.sortOrder,
+        scheme: selectedScheme
       });
       
       setSearchResults(results);
@@ -307,6 +308,7 @@ export default function Home() {
                   subjectId={selectedSubjectId}
                   subject={selectedSubject}
                   selectedCategory={selectedCategory}
+                  scheme={selectedScheme}
                 />
               )}
               

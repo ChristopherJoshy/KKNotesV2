@@ -1,8 +1,7 @@
-const CACHE_NAME = 'kknotes-v2-cache-v3';
+const CACHE_NAME = 'kknotes-v2-cache-v4';
+
+// Only cache static assets that won't change often
 const urlsToCache = [
-  '/',
-  '/src/main.tsx',
-  '/src/index.css',
   'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
 ];
@@ -12,30 +11,88 @@ const IS_DEV = self.location.hostname === 'localhost' || self.location.hostname 
 
 // Install event
 self.addEventListener('install', (event) => {
-  if (IS_DEV) {
-    event.waitUntil(self.skipWaiting());
-    return;
-  }
+  // Always skip waiting to ensure latest service worker is active
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        return cache.addAll(urlsToCache);
-      })
+    (async () => {
+      if (!IS_DEV) {
+        const cache = await caches.open(CACHE_NAME);
+        // Only cache external resources, not app code
+        await cache.addAll(urlsToCache).catch(err => {
+          console.warn('Failed to cache some resources:', err);
+        });
+      }
+      await self.skipWaiting();
+    })()
   );
 });
 
-// Fetch event
+// Fetch event - Network first strategy to avoid stale content
 self.addEventListener('fetch', (event) => {
-  if (IS_DEV) {
-    // In development, do not intercept; always pass-through to network
-    return; // not calling respondWith lets the request proceed normally
+  // Skip non-GET requests
+  if (event.request.method !== 'GET') return;
+  
+  // Skip cross-origin requests except for fonts/icons we cache
+  const url = new URL(event.request.url);
+  const isExternalCached = urlsToCache.some(cachedUrl => event.request.url.startsWith(cachedUrl.split('?')[0]));
+  
+  if (url.origin !== self.location.origin && !isExternalCached) {
+    return;
   }
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      if (response) return response;
-      return fetch(event.request);
-    })
-  );
+  
+  // In development, always use network
+  if (IS_DEV) {
+    return;
+  }
+
+  // For HTML requests (navigation), always use network first
+  if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+    event.respondWith(
+      fetch(event.request)
+        .catch(() => caches.match('/index.html'))
+    );
+    return;
+  }
+
+  // For JS/CSS bundles, use network first with cache fallback
+  if (event.request.destination === 'script' || event.request.destination === 'style') {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          // Don't cache if not successful
+          if (!response || response.status !== 200) {
+            return response;
+          }
+          // Clone and cache
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(event.request, responseClone);
+          });
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // For external cached resources (fonts, icons), use cache first
+  if (isExternalCached) {
+    event.respondWith(
+      caches.match(event.request).then(response => {
+        if (response) return response;
+        return fetch(event.request).then(fetchResponse => {
+          if (fetchResponse && fetchResponse.status === 200) {
+            const clone = fetchResponse.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
+          return fetchResponse;
+        });
+      })
+    );
+    return;
+  }
+  
+  // For other requests, just use network
+  return;
 });
 
 // Activate event

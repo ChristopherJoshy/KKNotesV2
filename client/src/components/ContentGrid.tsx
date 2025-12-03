@@ -11,9 +11,10 @@ interface ContentGridProps {
   subjectId: string;
   subject: Subject;
   selectedCategory: "all" | "notes" | "videos";
+  scheme?: string;
 }
 
-export function ContentGrid({ semester, subjectId, subject, selectedCategory }: ContentGridProps) {
+export function ContentGrid({ semester, subjectId, subject, selectedCategory, scheme = "2019" }: ContentGridProps) {
   const [content, setContent] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -27,7 +28,7 @@ export function ContentGrid({ semester, subjectId, subject, selectedCategory }: 
       unsubscribe = firebaseService.onContentChange(semester, subjectId, selectedCategory, (updatedContent) => {
         setContent(updatedContent);
         setLoading(false);
-      });
+      }, scheme);
     };
 
     loadContent();
@@ -37,13 +38,13 @@ export function ContentGrid({ semester, subjectId, subject, selectedCategory }: 
         unsubscribe();
       }
     };
-  }, [semester, subjectId, selectedCategory]);
+  }, [semester, subjectId, selectedCategory, scheme]);
 
   const handleContentClick = async (item: ContentItem) => {
     try {
       if (item.category === "notes") {
         // Increment download counter for notes
-        await firebaseService.incrementDownload({ id: item.id, semester: item.semester, subjectId: item.subjectId });
+        await firebaseService.incrementDownload({ id: item.id, semester: item.semester, subjectId: item.subjectId }, scheme);
         window.open(item.url, '_blank');
         toast({
           title: "Note Downloaded",
@@ -51,7 +52,7 @@ export function ContentGrid({ semester, subjectId, subject, selectedCategory }: 
         });
       } else {
         // Increment view counter for videos
-        await firebaseService.incrementView({ id: item.id, semester: item.semester, subjectId: item.subjectId });
+        await firebaseService.incrementView({ id: item.id, semester: item.semester, subjectId: item.subjectId }, scheme);
         window.open(item.url, '_blank');
         toast({
           title: "Video Opened",

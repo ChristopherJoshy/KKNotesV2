@@ -11,6 +11,7 @@ export const subjectSchema = z.object({
 
 export const noteSchema = z.object({
   id: z.string(),
+  scheme: z.string().default("2019"),
   semester: z.string(),
   subjectId: z.string(),
   title: z.string(),
@@ -24,6 +25,7 @@ export const noteSchema = z.object({
 
 export const videoSchema = z.object({
   id: z.string(),
+  scheme: z.string().default("2019"),
   semester: z.string(),
   subjectId: z.string(),
   title: z.string(),
@@ -38,6 +40,7 @@ export const videoSchema = z.object({
 // Pending submission schema for user-submitted content awaiting approval
 export const pendingSubmissionSchema = z.object({
   id: z.string(),
+  scheme: z.string().default("2019"),
   semester: z.string(),
   subjectId: z.string(),
   title: z.string(),
@@ -84,6 +87,7 @@ export const ratingSchema = z.object({
   id: z.string(),
   contentId: z.string(),
   contentType: z.enum(["notes", "videos"]),
+  scheme: z.string().default("2019"),
   semester: z.string(),
   subjectId: z.string(),
   userId: z.string(),
@@ -98,6 +102,7 @@ export const reportSchema = z.object({
   id: z.string(),
   contentId: z.string(),
   contentType: z.enum(["notes", "videos"]),
+  scheme: z.string().default("2019"),
   semester: z.string(),
   subjectId: z.string(),
   contentTitle: z.string(),

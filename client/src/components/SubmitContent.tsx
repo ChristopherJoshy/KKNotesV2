@@ -31,8 +31,11 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
   const [loginPromptOpen, setLoginPromptOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [subjects, setSubjects] = React.useState<Record<string, any>>({});
+  const [schemes, setSchemes] = React.useState<Record<string, any>>({});
+  const [loadingSchemes, setLoadingSchemes] = React.useState(false);
   
   const [form, setForm] = React.useState({
+    scheme: "2019",
     semester: "",
     subjectId: "",
     title: "",
@@ -43,18 +46,42 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
     submitterEmail: ""
   });
 
-  const loadSubjects = async (semester: string) => {
+  // Load schemes on mount
+  React.useEffect(() => {
+    loadSchemes();
+  }, []);
+
+  const loadSchemes = async () => {
+    setLoadingSchemes(true);
     try {
-      const semesterSubjects = await firebaseService.getSubjects(semester);
+      const schemesData = await firebaseService.getSchemes();
+      setSchemes(schemesData);
+    } catch (error) {
+      console.error('Error loading schemes:', error);
+    } finally {
+      setLoadingSchemes(false);
+    }
+  };
+
+  const loadSubjects = async (semester: string, scheme: string) => {
+    try {
+      const semesterSubjects = await firebaseService.getSubjects(semester, scheme);
       setSubjects(semesterSubjects);
     } catch (error) {
       console.error('Error loading subjects:', error);
     }
   };
 
+  const handleSchemeChange = (scheme: string) => {
+    setForm(prev => ({ ...prev, scheme, subjectId: "" }));
+    if (form.semester) {
+      loadSubjects(form.semester, scheme);
+    }
+  };
+
   const handleSemesterChange = (semester: string) => {
     setForm(prev => ({ ...prev, semester, subjectId: "" }));
-    loadSubjects(semester);
+    loadSubjects(semester, form.scheme);
   };
 
   const validateUrl = (url: string, type: "notes" | "videos"): boolean => {
@@ -77,7 +104,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
 
   const handleSubmit = async () => {
     // Validate required fields
-    if (!form.semester || !form.subjectId || !form.title || !form.url) {
+    if (!form.scheme || !form.semester || !form.subjectId || !form.title || !form.url) {
       toast({
         title: "Missing Information",
         description: "Please fill in all required fields.",
@@ -102,6 +129,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
     try {
       // Create a pending submission that requires admin approval
       const submissionId = await firebaseService.createPendingSubmission({
+        scheme: form.scheme,
         semester: form.semester,
         subjectId: form.subjectId,
         title: form.title,
@@ -128,6 +156,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
       // Notify all admins about the new pending submission
       const pendingSubmission = {
         id: submissionId,
+        scheme: form.scheme,
         semester: form.semester,
         subjectId: form.subjectId,
         title: form.title,
@@ -150,6 +179,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
       
       // Reset form and close dialog
       setForm({
+        scheme: "2019",
         semester: "",
         subjectId: "",
         title: "",
@@ -252,6 +282,27 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
               <i className="fas fa-play-circle"></i>
               Video
             </Button>
+          </div>
+
+          {/* Scheme Selection */}
+          <div>
+            <Label className="text-sm">Scheme *</Label>
+            <Select value={form.scheme} onValueChange={handleSchemeChange} disabled={loadingSchemes}>
+              <SelectTrigger className="mt-1.5">
+                <SelectValue placeholder={loadingSchemes ? "Loading schemes..." : "Select scheme"} />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(schemes).map(([id, scheme]) => (
+                  <SelectItem key={id} value={id}>
+                    {(scheme as any).year} Scheme
+                    {(scheme as any).description && ` - ${(scheme as any).description}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Select the curriculum scheme this content belongs to
+            </p>
           </div>
 
           {/* Semester and Subject */}
