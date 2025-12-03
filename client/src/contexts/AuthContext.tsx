@@ -115,6 +115,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await firebaseService.upsertUser(normalized);
       setUser(normalized);
+      
+      // Auto-subscribe to push notifications after login
+      try {
+        await firebaseService.subscribeToPushNotifications(normalized.uid);
+        console.log('User subscribed to push notifications');
+      } catch (pushError) {
+        console.log('Push notification subscription not available:', pushError);
+        // Non-blocking - push notifications are optional
+      }
     } catch (error) {
       console.error("Error handling authenticated user:", error);
       toast({

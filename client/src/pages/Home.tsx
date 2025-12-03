@@ -29,6 +29,7 @@ export default function Home() {
   // Search state
   const [searchFilters, setSearchFilters] = React.useState<SearchFilters>({
     query: "",
+    scheme: "2019",
     semester: "all",
     subject: "all", 
     contentType: "all",
@@ -45,6 +46,8 @@ export default function Home() {
       try {
         const currentScheme = await firebaseService.getCurrentScheme();
         setSelectedScheme(currentScheme);
+        // Sync search filters with the loaded scheme
+        setSearchFilters(prev => ({ ...prev, scheme: currentScheme }));
       } catch (error) {
         console.error('Error loading current scheme:', error);
       }
@@ -116,6 +119,11 @@ export default function Home() {
   const handleSearchFiltersChange = React.useCallback(async (newFilters: SearchFilters) => {
     setSearchFilters(newFilters);
     
+    // Update selected scheme if changed in search filters
+    if (newFilters.scheme && newFilters.scheme !== selectedScheme) {
+      setSelectedScheme(newFilters.scheme);
+    }
+    
     // Switch to search view if there's a query or active filters
     const hasActiveSearch = newFilters.query.trim() || 
                            newFilters.semester !== "all" || 
@@ -129,7 +137,7 @@ export default function Home() {
       setCurrentView("browse");
       setSearchResults([]);
     }
-  }, []);
+  }, [selectedScheme]);
 
   /**
    * Perform search with given filters
@@ -144,7 +152,7 @@ export default function Home() {
         contentType: filters.contentType,
         sortBy: filters.sortBy,
         sortOrder: filters.sortOrder,
-        scheme: selectedScheme
+        scheme: filters.scheme || selectedScheme
       });
       
       setSearchResults(results);
@@ -162,6 +170,7 @@ export default function Home() {
   const handleClearFilters = () => {
     const clearedFilters: SearchFilters = {
       query: "",
+      scheme: selectedScheme,
       semester: "all",
       subject: "all",
       contentType: "all",

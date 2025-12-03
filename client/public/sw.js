@@ -146,6 +146,16 @@ const NOTIFICATION_STYLES = {
     icon: '/icon-192x192.png',
     badge: '/badge-72x72.png'
   },
+  admin_content_added: {
+    title: '📚 New Content Available!',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  content_approved: {
+    title: '✅ New Content!',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
   default: {
     title: '🔔 KKNotes Update',
     icon: '/icon-192x192.png',
@@ -155,7 +165,7 @@ const NOTIFICATION_STYLES = {
 
 // Push notification event with rich styling
 self.addEventListener('push', (event) => {
-  let data = { type: 'default', message: 'New update available!', url: '/' };
+  let data = { type: 'default', message: 'New update available!', url: '/', title: null };
   
   try {
     if (event.data) {
@@ -166,6 +176,8 @@ self.addEventListener('push', (event) => {
   }
 
   const style = NOTIFICATION_STYLES[data.type] || NOTIFICATION_STYLES.default;
+  // Use title from data if provided, otherwise use style default
+  const notificationTitle = data.title || style.title;
   
   const options = {
     body: data.message,
@@ -194,7 +206,7 @@ self.addEventListener('push', (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(style.title, options)
+    self.registration.showNotification(notificationTitle, options)
   );
 });
 

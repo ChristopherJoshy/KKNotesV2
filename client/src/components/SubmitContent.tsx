@@ -31,8 +31,9 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
   const [loginPromptOpen, setLoginPromptOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [subjects, setSubjects] = React.useState<Record<string, any>>({});
-  const [schemes, setSchemes] = React.useState<Record<string, any>>({});
+  const [schemes, setSchemes] = React.useState<Array<{ id: string; name: string; year: number; description?: string }>>([]);
   const [loadingSchemes, setLoadingSchemes] = React.useState(false);
+  const [loadingSubjects, setLoadingSubjects] = React.useState(false);
   
   const [form, setForm] = React.useState({
     scheme: "2019",
@@ -64,16 +65,23 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
   };
 
   const loadSubjects = async (semester: string, scheme: string) => {
+    setLoadingSubjects(true);
+    setSubjects({});
     try {
       const semesterSubjects = await firebaseService.getSubjects(semester, scheme);
-      setSubjects(semesterSubjects);
+      console.log('Loaded subjects for', semester, scheme, ':', semesterSubjects);
+      setSubjects(semesterSubjects || {});
     } catch (error) {
       console.error('Error loading subjects:', error);
+      setSubjects({});
+    } finally {
+      setLoadingSubjects(false);
     }
   };
 
   const handleSchemeChange = (scheme: string) => {
     setForm(prev => ({ ...prev, scheme, subjectId: "" }));
+    setSubjects({});
     if (form.semester) {
       loadSubjects(form.semester, scheme);
     }
@@ -81,6 +89,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
 
   const handleSemesterChange = (semester: string) => {
     setForm(prev => ({ ...prev, semester, subjectId: "" }));
+    setSubjects({});
     loadSubjects(semester, form.scheme);
   };
 
@@ -292,10 +301,10 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
                 <SelectValue placeholder={loadingSchemes ? "Loading schemes..." : "Select scheme"} />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(schemes).map(([id, scheme]) => (
-                  <SelectItem key={id} value={id}>
-                    {(scheme as any).year} Scheme
-                    {(scheme as any).description && ` - ${(scheme as any).description}`}
+                {schemes.map((scheme) => (
+                  <SelectItem key={scheme.id} value={scheme.id}>
+                    {scheme.year} Scheme
+                    {scheme.description && ` - ${scheme.description}`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -326,10 +335,18 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
               <Select 
                 value={form.subjectId} 
                 onValueChange={(v) => setForm(prev => ({ ...prev, subjectId: v }))}
-                disabled={!form.semester}
+                disabled={!form.semester || loadingSubjects}
               >
                 <SelectTrigger className="mt-1.5">
-                  <SelectValue placeholder={form.semester ? "Select subject" : "Select semester first"} />
+                  <SelectValue placeholder={
+                    !form.semester 
+                      ? "Select semester first" 
+                      : loadingSubjects 
+                        ? "Loading subjects..." 
+                        : Object.keys(subjects).length === 0 
+                          ? "No subjects available" 
+                          : "Select subject"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(subjects).map(([id, subject]) => (

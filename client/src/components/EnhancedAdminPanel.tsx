@@ -536,6 +536,19 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
         await firebaseService.createVideo(videoData as any);
       }
       
+      // Get subject name for notification
+      const subjectName = subjects[uploadForm.subjectId]?.name || uploadForm.subjectId;
+      
+      // Notify all users about the new content via push notification
+      await firebaseService.notifyAllUsersOfNewContent({
+        title: uploadForm.title,
+        contentType: uploadForm.category === "notes" ? "notes" : "videos",
+        semester: uploadForm.semester,
+        subjectId: uploadForm.subjectId,
+        subjectName,
+        adminName: user?.name || user?.email || "Admin",
+      });
+      
       toast({
         title: "Success",
         description: `${uploadForm.category === "notes" ? "Note" : "Video"} uploaded successfully`

@@ -766,6 +766,13 @@ export class FirebaseService {
         approvedByName,
       });
       
+      // Broadcast push notification to all users about new content
+      await this.notifyAllUsersOfContentUpdate('approved', {
+        title: submission.title,
+        contentType: submission.contentType,
+        adminName: approvedByName || 'Admin',
+      });
+      
       // Remove the pending submission
       await remove(ref(database, `pendingSubmissions/${submissionId}`));
     } catch (error) {
@@ -978,6 +985,222 @@ export class FirebaseService {
     } catch (error) {
       console.error('Error deleting notification:', error);
       throw error;
+    }
+  }
+
+  // ==================== PUSH NOTIFICATION OPERATIONS ====================
+
+  /**
+   * Get VAPID public key from server
+   */
+  async getVapidPublicKey(): Promise<string> {
+    try {
+      const response = await fetch('/api/push/vapid-public-key');
+      const data = await response.json();
+      return data.publicKey;
+    } catch (error) {
+      console.error('Error getting VAPID key:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Subscribe current browser to push notifications
+   */
+  async subscribeToPushNotifications(userId: string): Promise<boolean> {
+    try {
+      // Check if push notifications are supported
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        console.log('Push notifications not supported');
+        return false;
+      }
+
+      // Get service worker registration
+      const registration = await navigator.serviceWorker.ready;
+
+      // Check if already subscribed
+      let subscription = await registration.pushManager.getSubscription();
+      
+      if (!subscription) {
+        // Get VAPID public key
+        const vapidPublicKey = await this.getVapidPublicKey();
+        
+        // Convert VAPID key to Uint8Array
+        const urlBase64ToUint8Array = (base64String: string) => {
+          const padding = '='.repeat((4 - base64String.length % 4) % 4);
+          const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+          const rawData = window.atob(base64);
+          const outputArray = new Uint8Array(rawData.length);
+          for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+          }
+          return outputArray;
+        };
+
+        // Subscribe to push notifications
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+      }
+
+      // Save subscription to server
+      const response = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          subscription: subscription.toJSON(),
+          userAgent: navigator.userAgent
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save subscription');
+      }
+
+      console.log('Successfully subscribed to push notifications');
+      return true;
+    } catch (error) {
+      console.error('Error subscribing to push notifications:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Unsubscribe from push notifications
+   */
+  async unsubscribeFromPushNotifications(userId: string): Promise<boolean> {
+    try {
+      if (!('serviceWorker' in navigator)) {
+        return false;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+
+      if (subscription) {
+        // Unsubscribe locally
+        await subscription.unsubscribe();
+
+        // Remove from server
+        await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            endpoint: subscription.endpoint
+          })
+        });
+      }
+
+      console.log('Successfully unsubscribed from push notifications');
+      return true;
+    } catch (error) {
+      console.error('Error unsubscribing from push notifications:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Broadcast push notification to all subscribed users
+   */
+  async broadcastPushNotification(notification: {
+    type: string;
+    title: string;
+    message: string;
+    url?: string;
+    contentId?: string;
+    contentType?: string;
+    excludeUserId?: string;
+  }): Promise<{ sent: number; failed: number }> {
+    try {
+      const response = await fetch('/api/push/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(notification)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to broadcast notification');
+      }
+
+      const result = await response.json();
+      console.log('Broadcast complete:', result);
+      return { sent: result.sent || 0, failed: result.failed || 0 };
+    } catch (error) {
+      console.error('Error broadcasting push notification:', error);
+      return { sent: 0, failed: 0 };
+    }
+  }
+
+  /**
+   * Notify all users about new content (admin action)
+   */
+  async notifyAllUsersOfNewContent(content: {
+    title: string;
+    contentType: 'notes' | 'videos';
+    semester: string;
+    subjectId: string;
+    subjectName?: string;
+    adminName?: string;
+  }): Promise<void> {
+    try {
+      // Create in-app notifications for all users
+      const allUsers = await this.getAllUsers();
+      
+      const notificationPromises = allUsers.map(user => 
+        this.createNotification({
+          userId: user.uid,
+          type: 'admin_content_added',
+          title: 'New Content Available!',
+          message: `${content.adminName || 'Admin'} added new ${content.contentType === 'notes' ? 'notes' : 'video'}: "${content.title}" for ${content.subjectName || content.subjectId}`,
+          contentType: content.contentType,
+        })
+      );
+
+      await Promise.allSettled(notificationPromises);
+
+      // Also send push notification to all subscribed browsers
+      await this.broadcastPushNotification({
+        type: 'admin_content_added',
+        title: 'New Content Available! 📚',
+        message: `${content.adminName || 'Admin'} added "${content.title}" for ${content.subjectName || content.subjectId}`,
+        url: '/',
+        contentType: content.contentType,
+      });
+
+      console.log('Notified all users of new content');
+    } catch (error) {
+      console.error('Error notifying users of new content:', error);
+    }
+  }
+
+  /**
+   * Notify all users about content update
+   */
+  async notifyAllUsersOfContentUpdate(action: 'approved' | 'deleted' | 'updated', content: {
+    title: string;
+    contentType: 'notes' | 'videos';
+    adminName?: string;
+  }): Promise<void> {
+    try {
+      const actionMessages = {
+        approved: `New ${content.contentType === 'notes' ? 'notes' : 'video'} approved: "${content.title}"`,
+        deleted: `Content removed: "${content.title}"`,
+        updated: `Content updated: "${content.title}"`,
+      };
+
+      // Send push notification
+      await this.broadcastPushNotification({
+        type: action === 'approved' ? 'content_approved' : 'admin_content_added',
+        title: action === 'approved' ? '✅ New Content!' : '📢 Content Update',
+        message: actionMessages[action],
+        url: '/',
+        contentType: content.contentType,
+      });
+    } catch (error) {
+      console.error('Error notifying users of content update:', error);
     }
   }
 

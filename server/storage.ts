@@ -1,5 +1,22 @@
 import { Subject, Note, User, InsertNote } from "@shared/schema";
 import { SEMESTERS } from "@shared/schema";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, get, set, push, remove } from "firebase/database";
+
+// Firebase configuration - same as client
+const firebaseConfig = {
+  apiKey: process.env.VITE_FIREBASE_API_KEY || "AIzaSyCqyKYGmqPVDT6RIEhZ_7Pow8BLi_3mpKs",
+  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || "kk-notes.firebaseapp.com",
+  projectId: process.env.VITE_FIREBASE_PROJECT_ID || "kk-notes",
+  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "kk-notes.appspot.com",
+  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "962838091889",
+  appId: process.env.VITE_FIREBASE_APP_ID || "1:962838091889:web:c0e18bef12e340cb72f21f",
+  databaseURL: process.env.VITE_FIREBASE_DATABASE_URL || "https://kk-notes-default-rtdb.asia-southeast1.firebasedatabase.app"
+};
+
+// Initialize Firebase for server
+const app = initializeApp(firebaseConfig, 'server-app');
+const database = getDatabase(app);
 
 export interface IStorage {
   getSubjects(semester: string): Promise<Record<string, Subject>>;
@@ -10,6 +27,7 @@ export interface IStorage {
   getUser(uid: string): Promise<User | null>;
   createUser(user: User): Promise<void>;
   initializeSubjects(): Promise<void>;
+  getDatabase(): typeof database;
 }
 
 export class MemStorage implements IStorage {
@@ -115,6 +133,10 @@ export class MemStorage implements IStorage {
     // Subjects are already initialized in constructor
     // This method is for compatibility with Firebase service
     //Entho Kanjavu Sathanam
+  }
+
+  getDatabase(): typeof database {
+    return database;
   }
 }
 

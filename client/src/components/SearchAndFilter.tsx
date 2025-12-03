@@ -5,9 +5,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { firebaseService } from "@/lib/firebaseAdmin";
+import type { Scheme } from "@shared/schema";
 
 export interface SearchFilters {
   query: string;
+  scheme: string;
   semester: string;
   subject: string;
   contentType: "all" | "notes" | "videos";
@@ -56,6 +59,24 @@ export function SearchAndFilter({
   onClearFilters
 }: SearchAndFilterProps) {
   const [isFiltersOpen, setIsFiltersOpen] = React.useState(false);
+  const [schemes, setSchemes] = React.useState<Scheme[]>([]);
+  const [loadingSchemes, setLoadingSchemes] = React.useState(false);
+
+  // Load schemes on mount
+  React.useEffect(() => {
+    const loadSchemes = async () => {
+      setLoadingSchemes(true);
+      try {
+        const schemeList = await firebaseService.getSchemes();
+        setSchemes(schemeList);
+      } catch (error) {
+        console.error('Error loading schemes:', error);
+      } finally {
+        setLoadingSchemes(false);
+      }
+    };
+    loadSchemes();
+  }, []);
 
   /**
    * Update individual filter values
@@ -72,6 +93,7 @@ export function SearchAndFilter({
    */
   const getActiveFilterCount = () => {
     let count = 0;
+    if (filters.scheme && filters.scheme !== "2019") count++;
     if (filters.semester !== "all") count++;
     if (filters.subject !== "all") count++;
     if (filters.contentType !== "all") count++;
@@ -182,6 +204,27 @@ export function SearchAndFilter({
 
           <CollapsibleContent className="space-y-3 sm:space-y-4 mt-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {/* Scheme Filter */}
+              <div>
+                <label className="block text-xs sm:text-sm font-medium mb-1.5">Scheme</label>
+                <Select 
+                  value={filters.scheme || "2019"} 
+                  onValueChange={(value) => updateFilter('scheme', value)}
+                  disabled={loadingSchemes}
+                >
+                  <SelectTrigger data-testid="select-filter-scheme" className="h-9 sm:h-10 text-sm">
+                    <SelectValue placeholder={loadingSchemes ? "Loading..." : "Select scheme"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {schemes.map(scheme => (
+                      <SelectItem key={scheme.id} value={scheme.id}>
+                        {scheme.year} Scheme
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Semester Filter */}
               <div>
                 <label className="block text-xs sm:text-sm font-medium mb-1.5">Semester</label>
