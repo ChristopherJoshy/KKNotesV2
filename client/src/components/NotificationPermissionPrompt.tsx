@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Bell, BellRing, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,13 +9,39 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { getFCMToken, initializeMessaging } from "@/lib/firebase";
+import { getFCMToken, initializeMessaging, getNotificationPermission } from "@/lib/firebase";
 
 // Service worker registration path - use firebase-messaging-sw.js for FCM
 const SW_PATH = '/firebase-messaging-sw.js';
 
+// Local storage key for tracking subscription
+const LS_SUBSCRIPTION_KEY = 'fcm_subscription_status';
+
+/**
+ * Check if user is already subscribed
+ */
+function isAlreadySubscribed(): boolean {
+  try {
+    return localStorage.getItem(LS_SUBSCRIPTION_KEY) === 'subscribed';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark user as subscribed
+ */
+function markAsSubscribed(): void {
+  try {
+    localStorage.setItem(LS_SUBSCRIPTION_KEY, 'subscribed');
+  } catch {
+    // Ignore
+  }
+}
+
 /**
  * Register service worker and subscribe to FCM push notifications
+ * Production-ready with proper error handling and retry logic
  */
 async function subscribeToPushNotifications(userId: string): Promise<boolean> {
   try {
@@ -46,35 +72,50 @@ async function subscribeToPushNotifications(userId: string): Promise<boolean> {
     // Initialize Firebase Messaging
     await initializeMessaging();
 
-    // Get FCM token
-    const fcmToken = await getFCMToken();
+    // Get FCM token (with retry built-in)
+    const fcmToken = await getFCMToken(true); // Force refresh
     
     if (!fcmToken) {
       console.warn('[Push] Failed to get FCM token');
       return false;
     }
 
-    // Save FCM token to server
-    const response = await fetch('/api/push/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        token: fcmToken,
-        userAgent: navigator.userAgent
-      })
-    });
+    // Save FCM token to server with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    
+    try {
+      const response = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          token: fcmToken,
+          userAgent: navigator.userAgent
+        }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('[Push] Failed to save token:', error);
-      return false;
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('[Push] Failed to save token:', error);
+        return false;
+      }
+
+      console.log('[Push] Successfully subscribed to push notifications');
+      markAsSubscribed();
+      return true;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    console.log('[Push] Successfully subscribed to push notifications');
-    return true;
-  } catch (error) {
-    console.error('[Push] Error subscribing to notifications:', error);
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      console.error('[Push] Subscription request timed out');
+    } else {
+      console.error('[Push] Error subscribing to notifications:', error);
+    }
     return false;
   }
 }
@@ -85,6 +126,7 @@ export function NotificationPermissionPrompt() {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
   const [isRequesting, setIsRequesting] = useState(false);
 
+  // Check permissions and subscription status
   useEffect(() => {
     // Check if notifications are supported
     if (!("Notification" in window)) {
@@ -92,8 +134,13 @@ export function NotificationPermissionPrompt() {
       return;
     }
 
-    const currentPermission = Notification.permission;
+    const currentPermission = getNotificationPermission();
     setPermission(currentPermission);
+
+    // Don't show if already subscribed
+    if (isAlreadySubscribed()) {
+      return;
+    }
 
     // Show prompt only if:
     // 1. User is logged in
@@ -112,7 +159,8 @@ export function NotificationPermissionPrompt() {
     }
   }, [user]);
 
-  const handleRequestPermission = async () => {
+  // Memoized permission request handler
+  const handleRequestPermission = useCallback(async () => {
     if (!("Notification" in window) || !user) return;
 
     setIsRequesting(true);
@@ -143,17 +191,18 @@ export function NotificationPermissionPrompt() {
     } finally {
       setIsRequesting(false);
     }
-  };
+  }, [user]);
 
-  const handleDismiss = () => {
+  // Memoized dismiss handler
+  const handleDismiss = useCallback(() => {
     // Store dismissal in session storage so we don't ask again today
     const dismissedKey = `notification_prompt_dismissed_${new Date().toDateString()}`;
     sessionStorage.setItem(dismissedKey, "true");
     setShowPrompt(false);
-  };
+  }, []);
 
-  // Don't show if not supported, already granted/denied, or not logged in
-  if (permission === "unsupported" || permission === "granted" || permission === "denied" || !user) {
+  // Don't show if not supported, already granted/denied, already subscribed, or not logged in
+  if (permission === "unsupported" || permission === "granted" || permission === "denied" || !user || isAlreadySubscribed()) {
     return null;
   }
 
