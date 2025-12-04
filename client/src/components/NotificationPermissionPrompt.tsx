@@ -176,8 +176,7 @@ export function NotificationPermissionPrompt() {
           // Show a test notification
           new Notification("KKNotes Notifications Enabled! 🎉", {
             body: "You'll now receive updates about your submissions and content.",
-            icon: "/icon-192x192.png",
-            badge: "/badge-72x72.png",
+            icon: "/icon-192x192.svg",
             tag: "welcome",
           });
         } else {

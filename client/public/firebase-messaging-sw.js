@@ -1,10 +1,10 @@
 // Firebase Cloud Messaging Service Worker
 // Production-ready implementation for KKNotes
-// Version: 2.0.0
+// Version: 2.1.0 - Mobile notification fixes
 
 // ==================== SERVICE WORKER CONFIGURATION ====================
 
-const SW_VERSION = '2.0.0';
+const SW_VERSION = '2.1.0';
 const CACHE_NAME = `kknotes-fcm-v${SW_VERSION}`;
 
 // Import Firebase scripts for FCM
@@ -26,89 +26,93 @@ const firebaseConfig = {
 
 // ==================== NOTIFICATION STYLES ====================
 
+// Default icon - using SVG which works on most modern browsers
+const DEFAULT_ICON = '/icon-192x192.svg';
+const DEFAULT_BADGE = '/favicon-32.svg';
+
 // Notification styles for different types
 const NOTIFICATION_STYLES = {
   submission_pending: { 
     title: '⏳ Submission Pending', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'submission-pending',
     requireInteraction: false
   },
   submission_approved: { 
     title: '✅ Submission Approved!', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'submission-approved',
     requireInteraction: true
   },
   submission_rejected: { 
     title: '❌ Submission Rejected', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'submission-rejected',
     requireInteraction: true
   },
   content_rated: { 
     title: '⭐ New Rating!', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'content-rated',
     requireInteraction: false
   },
   content_reported: { 
     title: '⚠️ Content Report', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'content-reported',
     requireInteraction: true
   },
   pending_approval: { 
     title: '📋 New Approval Request', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'pending-approval',
     requireInteraction: true
   },
   admin_content_added: { 
     title: '📚 New Content Available!', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'admin-content',
     requireInteraction: false
   },
   content_approved: { 
     title: '✅ New Content!', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'content-approved',
     requireInteraction: false
   },
   admin_added: { 
     title: '👤 New Admin Added', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'admin-added',
     requireInteraction: false
   },
   admin_removed: { 
     title: '👤 Admin Removed', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'admin-removed',
     requireInteraction: false
   },
   report_reviewed: { 
     title: '🛡️ Report Reviewed', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'report-reviewed',
     requireInteraction: false
   },
   default: { 
     title: '🔔 KKNotes Update', 
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: DEFAULT_ICON,
+    badge: DEFAULT_BADGE,
     tag: 'kknotes-notification',
     requireInteraction: false
   }
@@ -142,6 +146,9 @@ initializeFirebase();
 
 // ==================== BACKGROUND MESSAGE HANDLER ====================
 
+// Track if we've already shown a notification for a message to avoid duplicates
+const shownNotifications = new Set();
+
 if (messaging) {
   messaging.onBackgroundMessage((payload) => {
     console.log('[FCM-SW] Received background message:', payload);
@@ -149,6 +156,20 @@ if (messaging) {
     try {
       const data = payload.data || {};
       const notification = payload.notification || {};
+      
+      // Create unique ID for this message to prevent duplicate notifications
+      const messageId = `${data.type || 'default'}-${data.timestamp || Date.now()}`;
+      
+      // Skip if already shown (can happen when both push and onBackgroundMessage fire)
+      if (shownNotifications.has(messageId)) {
+        console.log('[FCM-SW] Notification already shown, skipping');
+        return;
+      }
+      shownNotifications.add(messageId);
+      
+      // Clean up old entries after 1 minute
+      setTimeout(() => shownNotifications.delete(messageId), 60000);
+      
       const type = data.type || 'default';
       const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
       
@@ -182,8 +203,8 @@ if (messaging) {
       // Fallback notification
       return self.registration.showNotification('KKNotes', {
         body: 'You have a new notification',
-        icon: '/icon-192x192.png',
-        badge: '/badge-72x72.png'
+        icon: DEFAULT_ICON,
+        badge: DEFAULT_BADGE
       });
     }
   });
@@ -287,8 +308,8 @@ self.addEventListener('install', (event) => {
       // Pre-cache essential assets
       caches.open(CACHE_NAME).then((cache) => {
         return cache.addAll([
-          '/icon-192x192.png',
-          '/badge-72x72.png'
+          '/icon-192x192.svg',
+          '/favicon-32.svg'
         ]).catch((error) => {
           console.warn('[FCM-SW] Cache pre-fetch failed:', error);
         });
@@ -322,44 +343,72 @@ self.addEventListener('activate', (event) => {
 
 // ==================== PUSH EVENT HANDLER (FALLBACK) ====================
 
+// This handles raw push events - critical for mobile browsers
+// Some mobile browsers may not use onBackgroundMessage properly
 self.addEventListener('push', (event) => {
   console.log('[FCM-SW] Push event received');
   
-  // This is a fallback handler - FCM usually handles push via onBackgroundMessage
-  // But we handle it here too for robustness
-  
-  if (event.data) {
+  // Always show a notification for push events
+  const showNotification = async () => {
+    let payload = null;
+    let title = '🔔 KKNotes Update';
+    let body = 'You have a new notification';
+    let data = {};
+    
     try {
-      const payload = event.data.json();
-      console.log('[FCM-SW] Push payload:', payload);
-      
-      // If FCM handled it, skip
-      if (payload.notification && messaging) {
-        return;
-      }
-      
-      // Show notification for data-only messages
-      const data = payload.data || payload;
-      const type = data.type || 'default';
-      const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
-      
-      event.waitUntil(
-        self.registration.showNotification(data.title || style.title, {
-          body: data.message || data.body || 'You have a new notification',
+      if (event.data) {
+        payload = event.data.json();
+        console.log('[FCM-SW] Push payload:', payload);
+        
+        // Handle FCM format (notification + data)
+        const notification = payload.notification || {};
+        const payloadData = payload.data || {};
+        
+        title = notification.title || payloadData.title || title;
+        body = notification.body || payloadData.message || body;
+        
+        const type = payloadData.type || 'default';
+        const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
+        
+        data = {
+          url: payloadData.url || '/',
+          type: type,
+          contentId: payloadData.contentId,
+          contentType: payloadData.contentType,
+          timestamp: Date.now(),
+          sw_version: SW_VERSION
+        };
+        
+        // Use style-specific settings
+        return self.registration.showNotification(title, {
+          body: body,
           icon: style.icon,
           badge: style.badge,
           tag: `${style.tag}-${Date.now()}`,
-          data: {
-            url: data.url || '/',
-            type: type,
-            timestamp: Date.now()
-          }
-        })
-      );
+          vibrate: [100, 50, 100],
+          requireInteraction: style.requireInteraction,
+          silent: false,
+          renotify: true,
+          data: data,
+          actions: getNotificationActions(type)
+        });
+      }
     } catch (error) {
-      console.error('[FCM-SW] Error processing push event:', error);
+      console.error('[FCM-SW] Error processing push payload:', error);
     }
-  }
+    
+    // Fallback notification if parsing failed or no data
+    return self.registration.showNotification(title, {
+      body: body,
+      icon: DEFAULT_ICON,
+      badge: DEFAULT_BADGE,
+      tag: `kknotes-notification-${Date.now()}`,
+      vibrate: [100, 50, 100],
+      data: { url: '/', timestamp: Date.now() }
+    });
+  };
+  
+  event.waitUntil(showNotification());
 });
 
 // ==================== ERROR HANDLING ====================

@@ -284,20 +284,25 @@ async function sendFCMMessage(
     }
 
     // FCM v1 API message format
+    // IMPORTANT: For mobile/PWA, we use data-only messages so the service worker handles display
     const message = {
       message: {
         token: token,
+        // Notification payload for display when app is in background
         notification: {
           title: payload.title,
           body: payload.message,
         },
+        // Web push specific options
         webpush: {
           notification: {
             title: payload.title,
             body: payload.message,
-            icon: '/icon-192x192.png',
-            badge: '/badge-72x72.png',
+            icon: '/icon-192x192.svg',
+            badge: '/favicon-32.svg',
             requireInteraction: payload.type === 'pending_approval',
+            // Vibration pattern for mobile
+            vibrate: [100, 50, 100],
           },
           fcm_options: {
             link: payload.url || '/',
@@ -307,6 +312,7 @@ async function sendFCMMessage(
             'Urgency': payload.type === 'pending_approval' ? 'high' : 'normal',
           },
         },
+        // Data payload - always delivered to service worker
         data: {
           type: payload.type,
           title: payload.title,
@@ -316,10 +322,32 @@ async function sendFCMMessage(
           contentType: payload.contentType || '',
           timestamp: Date.now().toString(),
         },
-        // High priority for web push
+        // Android-specific options for better mobile support
         android: {
           priority: 'high' as const,
           ttl: '86400s',
+          notification: {
+            channelId: 'kknotes_default',
+            priority: 'high' as const,
+            defaultVibrateTimings: true,
+            defaultSound: true,
+          },
+        },
+        // APNs options for iOS (if using capacitor/native wrapper)
+        apns: {
+          headers: {
+            'apns-priority': '10',
+          },
+          payload: {
+            aps: {
+              alert: {
+                title: payload.title,
+                body: payload.message,
+              },
+              sound: 'default',
+              badge: 1,
+            },
+          },
         },
       },
     };
