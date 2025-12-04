@@ -12,7 +12,7 @@ import {
   browserSessionPersistence,
   User as FirebaseUser
 } from "firebase/auth";
-import { auth, database } from "@/lib/firebase";
+import { auth, database, getFCMToken, onFCMMessage } from "@/lib/firebase";
 import { firebaseService } from "@/lib/firebaseAdmin";
 import { User } from "@shared/schema";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +28,68 @@ interface AuthContextType {
 
 // Create authentication context with strict typing
 const AuthContext = React.createContext<AuthContextType | undefined>(undefined);
+
+/**
+ * Register service worker and subscribe to FCM push notifications
+ * This enables background notifications even when the app is closed
+ */
+async function setupPushNotifications(userId: string): Promise<void> {
+  try {
+    // Check if push notifications are supported
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+      console.log('Push notifications not supported in this browser');
+      return;
+    }
+
+    // Register service worker if not already registered
+    let registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) {
+      registration = await navigator.serviceWorker.register('/sw.js');
+      console.log('Service worker registered');
+    }
+
+    // Wait for service worker to be ready
+    await navigator.serviceWorker.ready;
+
+    // Only proceed if notification permission is granted
+    if (Notification.permission !== 'granted') {
+      console.log('Notification permission not granted yet');
+      return;
+    }
+
+    // Get FCM token
+    const fcmToken = await getFCMToken();
+    
+    if (fcmToken) {
+      // Save FCM token to server
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          token: fcmToken,
+          userAgent: navigator.userAgent
+        })
+      });
+      console.log('FCM token saved for user:', userId);
+
+      // Setup foreground message handler
+      onFCMMessage((payload) => {
+        console.log('Foreground FCM message:', payload);
+        // Show notification using service worker when app is in foreground
+        if (payload.notification) {
+          const { title, body } = payload.notification;
+          toast({
+            title: title || 'New Notification',
+            description: body || 'You have a new notification',
+          });
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error setting up FCM push notifications:', error);
+  }
+}
 
 /**
  * Authentication provider component that manages user authentication state
@@ -115,6 +177,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await firebaseService.upsertUser(normalized);
       setUser(normalized);
+      
+      // Setup push notifications for background delivery (even when app is closed)
+      setupPushNotifications(firebaseUser.uid);
     } catch (error) {
       console.error("Error handling authenticated user:", error);
       toast({

@@ -7,6 +7,7 @@ import pushNotifications, {
   savePushSubscription, 
   removePushSubscription,
   broadcastPushNotification,
+  sendPushToUser,
   type PushNotificationPayload 
 } from "./pushNotifications";
 
@@ -26,46 +27,46 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // ==================== PUSH NOTIFICATION ROUTES ====================
+  // ==================== FCM PUSH NOTIFICATION ROUTES ====================
   
-  // Get VAPID public key for client subscription
+  // Get VAPID public key for FCM client subscription
   app.get("/api/push/vapid-public-key", (req, res) => {
     res.json({ publicKey: getVapidPublicKey() });
   });
 
-  // Subscribe to push notifications
+  // Subscribe to push notifications (save FCM token)
   app.post("/api/push/subscribe", async (req, res) => {
     try {
-      const { userId, subscription, userAgent } = req.body;
+      const { userId, token, userAgent } = req.body;
       
-      if (!userId || !subscription) {
-        return res.status(400).json({ error: 'Missing userId or subscription' });
+      if (!userId || !token) {
+        return res.status(400).json({ error: 'Missing userId or FCM token' });
       }
 
       const database = storage.getDatabase();
-      const subId = await savePushSubscription(database, userId, subscription, userAgent);
-      res.json({ message: 'Subscription saved', subscriptionId: subId });
+      const tokenId = await savePushSubscription(database, userId, token, userAgent);
+      res.json({ message: 'FCM token saved', tokenId });
     } catch (error) {
-      console.error('Error saving push subscription:', error);
-      res.status(500).json({ error: 'Failed to save subscription' });
+      console.error('Error saving FCM token:', error);
+      res.status(500).json({ error: 'Failed to save FCM token' });
     }
   });
 
-  // Unsubscribe from push notifications
+  // Unsubscribe from push notifications (remove FCM token)
   app.post("/api/push/unsubscribe", async (req, res) => {
     try {
-      const { userId, endpoint } = req.body;
+      const { userId, token } = req.body;
       
-      if (!userId || !endpoint) {
-        return res.status(400).json({ error: 'Missing userId or endpoint' });
+      if (!userId || !token) {
+        return res.status(400).json({ error: 'Missing userId or token' });
       }
 
       const database = storage.getDatabase();
-      await removePushSubscription(database, userId, endpoint);
-      res.json({ message: 'Subscription removed' });
+      await removePushSubscription(database, userId, token);
+      res.json({ message: 'FCM token removed' });
     } catch (error) {
-      console.error('Error removing push subscription:', error);
-      res.status(500).json({ error: 'Failed to remove subscription' });
+      console.error('Error removing FCM token:', error);
+      res.status(500).json({ error: 'Failed to remove FCM token' });
     }
   });
 
@@ -93,6 +94,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error broadcasting notification:', error);
       res.status(500).json({ error: 'Failed to broadcast notification' });
+    }
+  });
+
+  // Send push notification to a specific user (for background notifications)
+  app.post("/api/push/send-to-user", async (req, res) => {
+    try {
+      const { userId, payload } = req.body;
+      
+      if (!userId || !payload) {
+        return res.status(400).json({ error: 'Missing userId or payload' });
+      }
+
+      const notificationPayload: PushNotificationPayload = {
+        type: payload.type || 'pending_approval',
+        title: payload.title || 'KKNotes Update',
+        message: payload.message || 'You have a new notification',
+        url: payload.url || '/',
+        contentId: payload.contentId,
+        contentType: payload.contentType,
+      };
+
+      const database = storage.getDatabase();
+      const stats = await sendPushToUser(database, userId, notificationPayload);
+      res.json({ message: 'Notification sent', ...stats });
+    } catch (error) {
+      console.error('Error sending notification to user:', error);
+      res.status(500).json({ error: 'Failed to send notification' });
     }
   });
 

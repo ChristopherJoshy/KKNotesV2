@@ -9,6 +9,45 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
+import { getFCMToken } from "@/lib/firebase";
+
+/**
+ * Subscribe user to FCM push notifications after permission is granted
+ */
+async function subscribeToPushNotifications(userId: string): Promise<void> {
+  try {
+    if (!('serviceWorker' in navigator)) {
+      console.log('Service Worker not supported');
+      return;
+    }
+
+    // Get service worker registration
+    let registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) {
+      registration = await navigator.serviceWorker.register('/sw.js');
+    }
+    await navigator.serviceWorker.ready;
+
+    // Get FCM token
+    const fcmToken = await getFCMToken();
+    
+    if (fcmToken) {
+      // Save FCM token to server
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          token: fcmToken,
+          userAgent: navigator.userAgent
+        })
+      });
+      console.log('FCM token saved for user:', userId);
+    }
+  } catch (error) {
+    console.error('Error subscribing to FCM push notifications:', error);
+  }
+}
 
 export function NotificationPermissionPrompt() {
   const { user } = useAuth();
@@ -44,14 +83,17 @@ export function NotificationPermissionPrompt() {
   }, [user]);
 
   const handleRequestPermission = async () => {
-    if (!("Notification" in window)) return;
+    if (!("Notification" in window) || !user) return;
 
     setIsRequesting(true);
     try {
       const result = await Notification.requestPermission();
       setPermission(result);
       
-      if (result === "granted") {
+      if (result === "granted" && user) {
+        // Subscribe user to push notifications for background delivery
+        await subscribeToPushNotifications(user.uid);
+        
         // Show a test notification
         new Notification("KKNotes Notifications Enabled! 🎉", {
           body: "You'll now receive updates about your submissions and content.",

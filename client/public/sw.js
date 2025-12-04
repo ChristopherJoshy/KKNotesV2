@@ -1,4 +1,21 @@
-const CACHE_NAME = 'kknotes-v2-cache-v4';
+// Import Firebase scripts for FCM in service worker
+importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
+
+const CACHE_NAME = 'kknotes-v2-cache-v5';
+
+// Initialize Firebase in the service worker
+firebase.initializeApp({
+  apiKey: "AIzaSyDSzgYbLym_x8DomEuOVVCeA4thW48IdGs",
+  authDomain: "kknotesadvanced.firebaseapp.com",
+  projectId: "kknotesadvanced",
+  storageBucket: "kknotesadvanced.firebasestorage.app",
+  messagingSenderId: "388227934488",
+  appId: "1:388227934488:web:76d3d4117fac37ef26566d"
+});
+
+// Retrieve Firebase Messaging instance
+const messaging = firebase.messaging();
 
 // Only cache static assets that won't change often
 const urlsToCache = [
@@ -156,6 +173,46 @@ const NOTIFICATION_STYLES = {
     icon: '/icon-192x192.png',
     badge: '/badge-72x72.png'
   },
+  admin_added: {
+    title: '👤 New Admin Added',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  admin_removed: {
+    title: '👤 Admin Removed',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  report_reviewed: {
+    title: '🛡️ Report Reviewed',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  admin_content_deleted: {
+    title: '🗑️ Content Deleted',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  admin_scheme_created: {
+    title: '📋 New Scheme Created',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  admin_subject_added: {
+    title: '📁 Subject Added',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  admin_subject_deleted: {
+    title: '📁 Subject Deleted',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
+  content_deleted: {
+    title: '🗑️ Your Content Was Removed',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png'
+  },
   default: {
     title: '🔔 KKNotes Update',
     icon: '/icon-192x192.png',
@@ -163,7 +220,7 @@ const NOTIFICATION_STYLES = {
   }
 };
 
-// Push notification event with rich styling
+// Push notification event with rich styling (for web-push fallback)
 self.addEventListener('push', (event) => {
   let data = { type: 'default', message: 'New update available!', url: '/', title: null };
   
@@ -208,6 +265,47 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(notificationTitle, options)
   );
+});
+
+// Handle FCM background messages
+messaging.onBackgroundMessage((payload) => {
+  console.log('[FCM] Received background message:', payload);
+  
+  const notificationData = payload.data || {};
+  const notification = payload.notification || {};
+  
+  const type = notificationData.type || 'default';
+  const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
+  
+  const notificationTitle = notification.title || notificationData.title || style.title;
+  const notificationBody = notification.body || notificationData.message || 'You have a new notification';
+  
+  const notificationOptions = {
+    body: notificationBody,
+    icon: style.icon,
+    badge: style.badge,
+    vibrate: [100, 50, 100, 50, 100],
+    tag: type + '-' + Date.now(),
+    renotify: true,
+    requireInteraction: type === 'pending_approval',
+    data: {
+      url: notificationData.url || '/',
+      type: type,
+      dateOfArrival: Date.now()
+    },
+    actions: [
+      {
+        action: 'view',
+        title: '👀 View',
+      },
+      {
+        action: 'dismiss',
+        title: '✕ Dismiss',
+      }
+    ]
+  };
+
+  return self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
 // Notification click event with smart navigation

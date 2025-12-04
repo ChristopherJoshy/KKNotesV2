@@ -1,32 +1,15 @@
-import webpush from 'web-push';
 import { ref, get, set, push, remove } from 'firebase/database';
 
-// VAPID keys for web push - these should be stored securely in environment variables
-// Generate with: npx web-push generate-vapid-keys
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BFMbqx7sR9_bsMHeK6H0Sw35xzQcOMNIU6GpII3esXGhf20DO-6PC28dSWtU9L3R2xlZSRHZpyPnDCg1Kvj5kgM';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'LHYEqEsOKH5kR5DkVK7_XHak0s--3Qrbdxtg9uAvBCY';
+// Firebase Cloud Messaging VAPID Key for Web Push
+const FCM_VAPID_PUBLIC_KEY = process.env.VITE_FIREBASE_VAPID_KEY || 'BIWt-uVrufpuhAlGMo3JZw-ZkiJ1mIFrMqe2zModpFsclumO45KnbVZdQAzFJkMWF8Dfy-AmtoD2OEf5wS6ZXS8';
 
-// Configure web-push
-webpush.setVapidDetails(
-  'mailto:admin@kknotes.com',
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
-);
-
-export interface PushSubscription {
-  endpoint: string;
-  expirationTime: number | null;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
-}
-
-export interface StoredSubscription {
+// FCM token storage structure
+export interface StoredFCMToken {
   id: string;
   userId: string;
-  subscription: PushSubscription;
+  token: string;
   createdAt: number;
+  updatedAt?: number;
   userAgent?: string;
 }
 
@@ -40,42 +23,199 @@ export interface PushNotificationPayload {
 }
 
 /**
- * Get the public VAPID key for client subscription
+ * Get the public VAPID key for FCM client subscription
  */
 export function getVapidPublicKey(): string {
-  return VAPID_PUBLIC_KEY;
+  return FCM_VAPID_PUBLIC_KEY;
 }
 
 /**
- * Send push notification to a single subscription
+ * Save an FCM token for a user (prevents duplicates by token)
  */
-export async function sendPushToSubscription(
-  subscription: PushSubscription,
-  payload: PushNotificationPayload
-): Promise<boolean> {
+export async function savePushSubscription(
+  database: any,
+  userId: string,
+  token: string,
+  userAgent?: string
+): Promise<string> {
   try {
-    await webpush.sendNotification(
-      subscription,
-      JSON.stringify(payload),
-      {
-        TTL: 60 * 60 * 24, // 24 hours
-        urgency: 'normal',
+    // First check if this token already exists for this user to prevent duplicates
+    const userTokensRef = ref(database, `fcmTokens/${userId}`);
+    const snapshot = await get(userTokensRef);
+    const existingData = snapshot.val();
+    
+    if (existingData) {
+      for (const [tokenId, tokenData] of Object.entries(existingData as Record<string, any>)) {
+        if (tokenData?.token === token) {
+          // Update existing token instead of creating duplicate
+          await set(ref(database, `fcmTokens/${userId}/${tokenId}`), {
+            token,
+            createdAt: tokenData.createdAt || Date.now(),
+            updatedAt: Date.now(),
+            userAgent,
+          });
+          console.log('Updated existing FCM token for user:', userId);
+          return tokenId;
+        }
       }
-    );
-    return true;
-  } catch (error: any) {
-    // Handle expired subscriptions
-    if (error.statusCode === 410 || error.statusCode === 404) {
-      console.log('Subscription expired or invalid:', error.statusCode);
-      return false;
     }
-    console.error('Error sending push notification:', error);
-    return false;
+    
+    // Create new token if no duplicate found
+    const tokenRef = push(ref(database, `fcmTokens/${userId}`));
+    await set(tokenRef, {
+      token,
+      createdAt: Date.now(),
+      userAgent,
+    });
+    console.log('Created new FCM token for user:', userId);
+    return tokenRef.key!;
+  } catch (error) {
+    console.error('Error saving FCM token:', error);
+    throw error;
   }
 }
 
 /**
- * Broadcast push notification to all subscriptions in the database
+ * Remove an FCM token
+ */
+export async function removePushSubscription(
+  database: any,
+  userId: string,
+  token: string
+): Promise<void> {
+  try {
+    const userTokensRef = ref(database, `fcmTokens/${userId}`);
+    const snapshot = await get(userTokensRef);
+    const data = snapshot.val();
+
+    if (data) {
+      for (const [tokenId, tokenData] of Object.entries(data as Record<string, any>)) {
+        if (tokenData?.token === token) {
+          await remove(ref(database, `fcmTokens/${userId}/${tokenId}`));
+          console.log('Removed FCM token for user:', userId);
+          return;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error removing FCM token:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get all FCM tokens for a user
+ */
+export async function getUserFCMTokens(
+  database: any,
+  userId: string
+): Promise<StoredFCMToken[]> {
+  try {
+    const userTokensRef = ref(database, `fcmTokens/${userId}`);
+    const snapshot = await get(userTokensRef);
+    const data = snapshot.val();
+
+    if (!data) {
+      return [];
+    }
+
+    const tokens: StoredFCMToken[] = [];
+    Object.entries(data as Record<string, any>).forEach(([tokenId, tokenData]) => {
+      if (tokenData?.token) {
+        tokens.push({
+          id: tokenId,
+          userId,
+          token: tokenData.token,
+          createdAt: tokenData.createdAt || Date.now(),
+          updatedAt: tokenData.updatedAt,
+          userAgent: tokenData.userAgent,
+        });
+      }
+    });
+
+    return tokens;
+  } catch (error) {
+    console.error('Error getting user FCM tokens:', error);
+    return [];
+  }
+}
+
+/**
+ * Get all FCM tokens from the database
+ */
+export async function getAllFCMTokens(
+  database: any,
+  excludeUserId?: string
+): Promise<StoredFCMToken[]> {
+  try {
+    const tokensRef = ref(database, 'fcmTokens');
+    const snapshot = await get(tokensRef);
+    const data = snapshot.val();
+
+    if (!data) {
+      return [];
+    }
+
+    const tokens: StoredFCMToken[] = [];
+    Object.entries(data as Record<string, any>).forEach(([userId, userTokens]) => {
+      if (excludeUserId && userId === excludeUserId) return;
+      
+      if (typeof userTokens === 'object' && userTokens !== null) {
+        Object.entries(userTokens as Record<string, any>).forEach(([tokenId, tokenData]) => {
+          if (tokenData?.token) {
+            tokens.push({
+              id: tokenId,
+              userId,
+              token: tokenData.token,
+              createdAt: tokenData.createdAt || Date.now(),
+              updatedAt: tokenData.updatedAt,
+              userAgent: tokenData.userAgent,
+            });
+          }
+        });
+      }
+    });
+
+    return tokens;
+  } catch (error) {
+    console.error('Error getting all FCM tokens:', error);
+    return [];
+  }
+}
+
+/**
+ * Store notification in user's notification queue for FCM delivery
+ * FCM delivery is handled client-side via Firebase Cloud Messaging
+ */
+export async function sendPushToUser(
+  database: any,
+  userId: string,
+  payload: PushNotificationPayload
+): Promise<{ sent: number; failed: number; removed: number }> {
+  const stats = { sent: 0, failed: 0, removed: 0 };
+
+  try {
+    // Store the push notification data in a pending queue for the user
+    // The actual FCM delivery happens via Firebase's onMessage handlers
+    const pendingRef = push(ref(database, `pendingPushNotifications/${userId}`));
+    await set(pendingRef, {
+      ...payload,
+      createdAt: Date.now(),
+      delivered: false,
+    });
+    
+    stats.sent = 1;
+    console.log(`Queued push notification for user: ${userId}`);
+    return stats;
+  } catch (error) {
+    console.error('Error queueing push notification for user:', error);
+    stats.failed = 1;
+    return stats;
+  }
+}
+
+/**
+ * Broadcast push notification to all users by storing in their pending queues
  */
 export async function broadcastPushNotification(
   database: any,
@@ -85,52 +225,23 @@ export async function broadcastPushNotification(
   const stats = { sent: 0, failed: 0, removed: 0 };
 
   try {
-    const subscriptionsRef = ref(database, 'pushSubscriptions');
-    const snapshot = await get(subscriptionsRef);
-    const data = snapshot.val();
-
-    if (!data) {
-      console.log('No push subscriptions found');
-      return stats;
-    }
-
-    const subscriptions: StoredSubscription[] = [];
+    // Get all users with FCM tokens
+    const tokens = await getAllFCMTokens(database, excludeUserId);
     
-    // Collect all subscriptions
-    Object.entries(data as Record<string, any>).forEach(([userId, userSubs]) => {
-      if (excludeUserId && userId === excludeUserId) return;
-      
-      if (typeof userSubs === 'object' && userSubs !== null) {
-        Object.entries(userSubs as Record<string, any>).forEach(([subId, subData]) => {
-          if (subData?.subscription) {
-            subscriptions.push({
-              id: subId,
-              userId,
-              subscription: subData.subscription,
-              createdAt: subData.createdAt || Date.now(),
-              userAgent: subData.userAgent,
-            });
-          }
-        });
-      }
-    });
+    // Get unique user IDs
+    const userIds = Array.from(new Set(tokens.map(t => t.userId)));
+    
+    console.log(`Broadcasting to ${userIds.length} users`);
 
-    console.log(`Broadcasting to ${subscriptions.length} subscriptions`);
-
-    // Send to all subscriptions in parallel
+    // Queue notification for each user
     const results = await Promise.allSettled(
-      subscriptions.map(async (sub) => {
-        const success = await sendPushToSubscription(sub.subscription, payload);
-        if (!success) {
-          // Remove invalid subscription
-          try {
-            await remove(ref(database, `pushSubscriptions/${sub.userId}/${sub.id}`));
-            stats.removed++;
-          } catch (e) {
-            console.error('Failed to remove invalid subscription:', e);
-          }
-          return false;
-        }
+      userIds.map(async (userId) => {
+        const pendingRef = push(ref(database, `pendingPushNotifications/${userId}`));
+        await set(pendingRef, {
+          ...payload,
+          createdAt: Date.now(),
+          delivered: false,
+        });
         return true;
       })
     );
@@ -143,7 +254,7 @@ export async function broadcastPushNotification(
       }
     });
 
-    console.log(`Push broadcast complete: ${stats.sent} sent, ${stats.failed} failed, ${stats.removed} removed`);
+    console.log(`Push broadcast complete: ${stats.sent} queued, ${stats.failed} failed`);
     return stats;
   } catch (error) {
     console.error('Error broadcasting push notifications:', error);
@@ -151,61 +262,12 @@ export async function broadcastPushNotification(
   }
 }
 
-/**
- * Save a push subscription for a user
- */
-export async function savePushSubscription(
-  database: any,
-  userId: string,
-  subscription: PushSubscription,
-  userAgent?: string
-): Promise<string> {
-  try {
-    const subscriptionRef = push(ref(database, `pushSubscriptions/${userId}`));
-    await set(subscriptionRef, {
-      subscription,
-      createdAt: Date.now(),
-      userAgent,
-    });
-    return subscriptionRef.key!;
-  } catch (error) {
-    console.error('Error saving push subscription:', error);
-    throw error;
-  }
-}
-
-/**
- * Remove a push subscription
- */
-export async function removePushSubscription(
-  database: any,
-  userId: string,
-  endpoint: string
-): Promise<void> {
-  try {
-    const userSubsRef = ref(database, `pushSubscriptions/${userId}`);
-    const snapshot = await get(userSubsRef);
-    const data = snapshot.val();
-
-    if (data) {
-      for (const [subId, subData] of Object.entries(data as Record<string, any>)) {
-        if (subData?.subscription?.endpoint === endpoint) {
-          await remove(ref(database, `pushSubscriptions/${userId}/${subId}`));
-          console.log('Removed push subscription for user:', userId);
-          return;
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error removing push subscription:', error);
-    throw error;
-  }
-}
-
 export default {
   getVapidPublicKey,
-  sendPushToSubscription,
   broadcastPushNotification,
+  sendPushToUser,
   savePushSubscription,
   removePushSubscription,
+  getUserFCMTokens,
+  getAllFCMTokens,
 };

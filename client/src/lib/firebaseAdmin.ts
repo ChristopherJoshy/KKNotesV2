@@ -600,7 +600,7 @@ export class FirebaseService {
     }
   }
   
-  // Notify admins when an admin directly adds content
+  // Notify ALL admins when an admin directly adds content
   private async notifyAdminsOfDirectContent(params: {
     title: string;
     contentType: 'notes' | 'videos';
@@ -615,8 +615,8 @@ export class FirebaseService {
       
       for (const admin of admins) {
         const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
-        // Don't notify the person who added it
-        if (adminUser && adminUser.uid !== params.addedBy) {
+        // Notify ALL admins
+        if (adminUser) {
           await this.createNotification({
             userId: adminUser.uid,
             type: 'admin_content_added',
@@ -774,7 +774,7 @@ export class FirebaseService {
     }
   }
   
-  // Notify admins when content is approved
+  // Notify ALL admins when content is approved
   private async notifyAdminsOfContentApproval(params: {
     submission: PendingSubmission;
     approvedBy?: string;
@@ -787,9 +787,9 @@ export class FirebaseService {
       const approverDisplay = params.approvedByName || params.approvedBy || 'An admin';
       
       for (const admin of admins) {
-        // Don't notify the person who approved
         const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
-        if (adminUser && adminUser.uid !== params.approvedBy) {
+        // Notify ALL admins
+        if (adminUser) {
           await this.createNotification({
             userId: adminUser.uid,
             type: 'content_approved',
@@ -812,8 +812,12 @@ export class FirebaseService {
       const snap = await get(ref(database, `pendingSubmissions/${submissionId}`));
       const submission = snap.val() as PendingSubmission | null;
       
-      if (submission && submission.submittedBy) {
-        // Notify the submitter that their content was rejected
+      if (!submission) {
+        throw new Error('Submission not found');
+      }
+      
+      // Only notify the original submitter (not admins with this message)
+      if (submission.submittedBy) {
         await this.createNotification({
           userId: submission.submittedBy,
           type: 'submission_rejected',
@@ -825,10 +829,51 @@ export class FirebaseService {
         });
       }
       
+      // Notify OTHER admins about the rejection (different message, different notification type)
+      await this.notifyAdminsOfContentRejection({
+        submission,
+        rejectedBy,
+        rejectedByName,
+        reason,
+      });
+      
       await remove(ref(database, `pendingSubmissions/${submissionId}`));
     } catch (error) {
       console.error('Error rejecting submission:', error);
       throw error;
+    }
+  }
+  
+  // Notify ALL admins when content is rejected (NOT the user notification)
+  private async notifyAdminsOfContentRejection(params: {
+    submission: PendingSubmission;
+    rejectedBy?: string;
+    rejectedByName?: string;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const admins = await this.getAdmins();
+      const allUsers = await this.getAllUsers();
+      
+      const rejecterDisplay = params.rejectedByName || params.rejectedBy || 'An admin';
+      
+      for (const admin of admins) {
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        // Notify ALL admins
+        if (adminUser) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: 'submission_rejected', // This goes to admin, but message is different
+            title: 'Submission Rejected',
+            message: `${rejecterDisplay} rejected "${params.submission.title}" (${params.submission.contentType}) submitted by ${params.submission.submitterName || 'Anonymous'}.${params.reason ? ` Reason: ${params.reason}` : ''}`,
+            contentType: params.submission.contentType,
+            fromUser: params.rejectedBy,
+            fromUserName: params.rejectedByName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error notifying admins of content rejection:', error);
     }
   }
 
@@ -857,10 +902,36 @@ export class FirebaseService {
 
   // ==================== NOTIFICATION OPERATIONS ====================
   
-  // Helper to send browser push notification
-  private async sendBrowserNotification(notification: InsertAppNotification): Promise<void> {
+  // Helper to send push notification via server (works even when app is closed)
+  private async sendServerPushNotification(notification: InsertAppNotification): Promise<void> {
+    try {
+      // Send via server-side web-push API for reliable background delivery
+      await fetch('/api/push/send-to-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: notification.userId,
+          payload: {
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            url: '/',
+            contentId: notification.contentId,
+            contentType: notification.contentType,
+          }
+        })
+      });
+    } catch (error) {
+      console.error('Error sending server push notification:', error);
+      // Fallback to local notification if server push fails and page is open
+      await this.sendLocalBrowserNotification(notification);
+    }
+  }
+
+  // Fallback for local browser notification (only works when page is open)
+  private async sendLocalBrowserNotification(notification: InsertAppNotification): Promise<void> {
     // Check if we have permission and the API is available
-    if (!('Notification' in window) || window.Notification.permission !== 'granted') {
+    if (typeof window === 'undefined' || !('Notification' in window) || window.Notification.permission !== 'granted') {
       return;
     }
 
@@ -887,7 +958,7 @@ export class FirebaseService {
         new Notification(notification.title, options);
       }
     } catch (error) {
-      console.error('Error sending browser notification:', error);
+      console.error('Error sending local browser notification:', error);
     }
   }
 
@@ -902,8 +973,8 @@ export class FirebaseService {
       };
       await set(notifRef, notifData);
       
-      // Also send browser push notification
-      await this.sendBrowserNotification(notification);
+      // Send push notification via server (works even when app is closed)
+      await this.sendServerPushNotification(notification);
       
       return notifRef.key!;
     } catch (error) {
@@ -1128,7 +1199,8 @@ export class FirebaseService {
   }
 
   /**
-   * Notify all admins about admin panel activity (content added, etc.)
+   * Notify ALL admins about admin panel activity (content added, etc.)
+   * Every admin receives the notification, including the one who performed the action
    */
   async notifyAdminsOfActivity(activity: {
     type: AppNotification['type'];
@@ -1138,7 +1210,7 @@ export class FirebaseService {
     contentType?: 'notes' | 'videos';
     performedBy?: string;
     performedByName?: string;
-    excludeUserId?: string;
+    excludeUserId?: string; // Optional: only use if you specifically want to exclude someone
   }): Promise<void> {
     try {
       const admins = await this.getAdmins();
@@ -1146,8 +1218,8 @@ export class FirebaseService {
       
       for (const admin of admins) {
         const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
-        // Don't notify the admin who performed the action
-        if (adminUser && adminUser.uid !== activity.excludeUserId) {
+        // Notify ALL admins (only exclude if explicitly specified AND excludeUserId is set)
+        if (adminUser) {
           await this.createNotification({
             userId: adminUser.uid,
             type: activity.type as AppNotification['type'],
@@ -1160,7 +1232,7 @@ export class FirebaseService {
           });
         }
       }
-      console.log('Notified admins of activity:', activity.type);
+      console.log('Notified ALL admins of activity:', activity.type);
     } catch (error) {
       console.error('Error notifying admins of activity:', error);
     }
@@ -1522,7 +1594,7 @@ export class FirebaseService {
     }
   }
   
-  // Notify other admins when a report is reviewed
+  // Notify ALL admins when a report is reviewed
   private async notifyAdminsOfReportReview(params: {
     report: Report;
     status: string;
@@ -1539,8 +1611,8 @@ export class FirebaseService {
       
       for (const admin of admins) {
         const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
-        // Don't notify the reviewer themselves
-        if (adminUser && adminUser.uid !== params.reviewedBy) {
+        // Notify ALL admins
+        if (adminUser) {
           await this.createNotification({
             userId: adminUser.uid,
             type: 'report_reviewed',
