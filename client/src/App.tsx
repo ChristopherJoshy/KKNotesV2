@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useFCMForegroundMessages } from "@/hooks/useFCMForegroundMessages";
 import Home from "@/pages/Home";
 import Admin from "@/pages/Admin";
 import NotFound from "@/pages/not-found";
@@ -29,6 +30,14 @@ function Router() {
 }
 
 /**
+ * Component that handles FCM foreground message notifications
+ */
+function FCMHandler() {
+  useFCMForegroundMessages();
+  return null;
+}
+
+/**
  * Main application component with provider hierarchy
  * Establishes context providers for state management, authentication, and UI
  */
@@ -39,6 +48,7 @@ function App() {
         <AuthProvider>
           <TooltipProvider>
             <Toaster />
+            <FCMHandler />
             <React.Suspense fallback={null}>
               <NotificationPermissionPrompt />
               <PWAInstallPrompt />

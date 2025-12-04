@@ -8,6 +8,7 @@ import pushNotifications, {
   removePushSubscription,
   broadcastPushNotification,
   sendPushToUser,
+  cleanupStaleTokens,
   type PushNotificationPayload 
 } from "./pushNotifications";
 
@@ -39,15 +40,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { userId, token, userAgent } = req.body;
       
-      if (!userId || !token) {
-        return res.status(400).json({ error: 'Missing userId or FCM token' });
+      if (!userId) {
+        return res.status(400).json({ error: 'Missing userId' });
+      }
+      
+      if (!token) {
+        return res.status(400).json({ error: 'Missing FCM token' });
+      }
+      
+      // Validate token format (FCM tokens are typically long strings)
+      if (typeof token !== 'string' || token.length < 100) {
+        return res.status(400).json({ error: 'Invalid FCM token format' });
       }
 
       const database = storage.getDatabase();
       const tokenId = await savePushSubscription(database, userId, token, userAgent);
+      
+      console.log(`[Push] Token saved for user ${userId}: ${token.substring(0, 20)}...`);
       res.json({ message: 'FCM token saved', tokenId });
     } catch (error) {
-      console.error('Error saving FCM token:', error);
+      console.error('[Push] Error saving FCM token:', error);
       res.status(500).json({ error: 'Failed to save FCM token' });
     }
   });
@@ -63,9 +75,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const database = storage.getDatabase();
       await removePushSubscription(database, userId, token);
+      
+      console.log(`[Push] Token removed for user ${userId}`);
       res.json({ message: 'FCM token removed' });
     } catch (error) {
-      console.error('Error removing FCM token:', error);
+      console.error('[Push] Error removing FCM token:', error);
       res.status(500).json({ error: 'Failed to remove FCM token' });
     }
   });
@@ -90,9 +104,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const database = storage.getDatabase();
       const stats = await broadcastPushNotification(database, payload, excludeUserId);
+      
+      console.log(`[Push] Broadcast complete:`, stats);
       res.json({ message: 'Broadcast complete', ...stats });
     } catch (error) {
-      console.error('Error broadcasting notification:', error);
+      console.error('[Push] Error broadcasting notification:', error);
       res.status(500).json({ error: 'Failed to broadcast notification' });
     }
   });
@@ -117,10 +133,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const database = storage.getDatabase();
       const stats = await sendPushToUser(database, userId, notificationPayload);
+      
+      console.log(`[Push] Sent to user ${userId}:`, stats);
       res.json({ message: 'Notification sent', ...stats });
     } catch (error) {
-      console.error('Error sending notification to user:', error);
+      console.error('[Push] Error sending notification to user:', error);
       res.status(500).json({ error: 'Failed to send notification' });
+    }
+  });
+
+  // Cleanup stale FCM tokens (can be called periodically or via cron)
+  app.post("/api/push/cleanup", async (req, res) => {
+    try {
+      const database = storage.getDatabase();
+      const cleaned = await cleanupStaleTokens(database);
+      
+      console.log(`[Push] Cleaned up ${cleaned} stale tokens`);
+      res.json({ message: 'Cleanup complete', cleaned });
+    } catch (error) {
+      console.error('[Push] Error cleaning up tokens:', error);
+      res.status(500).json({ error: 'Failed to cleanup tokens' });
     }
   });
 

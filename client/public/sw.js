@@ -1,21 +1,37 @@
 // Import Firebase scripts for FCM in service worker
-importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
+// Using latest compatible Firebase SDK version
+importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
 
-const CACHE_NAME = 'kknotes-v2-cache-v5';
+const CACHE_NAME = 'kknotes-v2-cache-v6';
 
-// Initialize Firebase in the service worker
-firebase.initializeApp({
+// Initialize Firebase in the service worker with full config
+// These values must match the client-side Firebase config
+const firebaseConfig = {
   apiKey: "AIzaSyDSzgYbLym_x8DomEuOVVCeA4thW48IdGs",
   authDomain: "kknotesadvanced.firebaseapp.com",
   projectId: "kknotesadvanced",
   storageBucket: "kknotesadvanced.firebasestorage.app",
   messagingSenderId: "388227934488",
-  appId: "1:388227934488:web:76d3d4117fac37ef26566d"
-});
+  appId: "1:388227934488:web:76d3d4117fac37ef26566d",
+  databaseURL: "https://kknotesadvanced-default-rtdb.firebaseio.com"
+};
 
-// Retrieve Firebase Messaging instance
-const messaging = firebase.messaging();
+// Initialize Firebase - handle potential reinitialization gracefully
+let messaging = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  messaging = firebase.messaging();
+  console.log('[SW] Firebase Messaging initialized successfully');
+} catch (error) {
+  // App might already be initialized
+  if (error.code === 'app/duplicate-app') {
+    messaging = firebase.messaging();
+    console.log('[SW] Firebase Messaging reused existing app');
+  } else {
+    console.error('[SW] Firebase Messaging initialization failed:', error);
+  }
+}
 
 // Only cache static assets that won't change often
 const urlsToCache = [
@@ -268,45 +284,49 @@ self.addEventListener('push', (event) => {
 });
 
 // Handle FCM background messages
-messaging.onBackgroundMessage((payload) => {
-  console.log('[FCM] Received background message:', payload);
-  
-  const notificationData = payload.data || {};
-  const notification = payload.notification || {};
-  
-  const type = notificationData.type || 'default';
-  const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
-  
-  const notificationTitle = notification.title || notificationData.title || style.title;
-  const notificationBody = notification.body || notificationData.message || 'You have a new notification';
-  
-  const notificationOptions = {
-    body: notificationBody,
-    icon: style.icon,
-    badge: style.badge,
-    vibrate: [100, 50, 100, 50, 100],
-    tag: type + '-' + Date.now(),
-    renotify: true,
-    requireInteraction: type === 'pending_approval',
-    data: {
-      url: notificationData.url || '/',
-      type: type,
-      dateOfArrival: Date.now()
-    },
-    actions: [
-      {
-        action: 'view',
-        title: '👀 View',
+if (messaging) {
+  messaging.onBackgroundMessage((payload) => {
+    console.log('[FCM] Received background message:', payload);
+    
+    const notificationData = payload.data || {};
+    const notification = payload.notification || {};
+    
+    const type = notificationData.type || 'default';
+    const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.default;
+    
+    const notificationTitle = notification.title || notificationData.title || style.title;
+    const notificationBody = notification.body || notificationData.message || 'You have a new notification';
+    
+    const notificationOptions = {
+      body: notificationBody,
+      icon: style.icon,
+      badge: style.badge,
+      vibrate: [100, 50, 100, 50, 100],
+      tag: type + '-' + Date.now(),
+      renotify: true,
+      requireInteraction: type === 'pending_approval',
+      data: {
+        url: notificationData.url || '/',
+        type: type,
+        dateOfArrival: Date.now()
       },
-      {
-        action: 'dismiss',
-        title: '✕ Dismiss',
-      }
-    ]
-  };
+      actions: [
+        {
+          action: 'view',
+          title: '👀 View',
+        },
+        {
+          action: 'dismiss',
+          title: '✕ Dismiss',
+        }
+      ]
+    };
 
-  return self.registration.showNotification(notificationTitle, notificationOptions);
-});
+    return self.registration.showNotification(notificationTitle, notificationOptions);
+  });
+} else {
+  console.warn('[SW] Firebase Messaging not available, background messages will not be handled');
+}
 
 // Notification click event with smart navigation
 self.addEventListener('notificationclick', (event) => {

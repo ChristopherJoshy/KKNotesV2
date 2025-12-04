@@ -9,43 +9,73 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { getFCMToken } from "@/lib/firebase";
+import { getFCMToken, initializeMessaging } from "@/lib/firebase";
+
+// Service worker registration path - use firebase-messaging-sw.js for FCM
+const SW_PATH = '/firebase-messaging-sw.js';
 
 /**
- * Subscribe user to FCM push notifications after permission is granted
+ * Register service worker and subscribe to FCM push notifications
  */
-async function subscribeToPushNotifications(userId: string): Promise<void> {
+async function subscribeToPushNotifications(userId: string): Promise<boolean> {
   try {
     if (!('serviceWorker' in navigator)) {
-      console.log('Service Worker not supported');
-      return;
+      console.warn('[Push] Service Worker not supported');
+      return false;
     }
 
-    // Get service worker registration
-    let registration = await navigator.serviceWorker.getRegistration();
-    if (!registration) {
-      registration = await navigator.serviceWorker.register('/sw.js');
+    if (!('PushManager' in window)) {
+      console.warn('[Push] Push notifications not supported');
+      return false;
     }
-    await navigator.serviceWorker.ready;
+
+    // Register the FCM service worker if not already registered
+    let registration = await navigator.serviceWorker.getRegistration(SW_PATH);
+    
+    if (!registration) {
+      console.log('[Push] Registering service worker...');
+      registration = await navigator.serviceWorker.register(SW_PATH, {
+        scope: '/',
+      });
+      
+      // Wait for the service worker to be ready
+      await navigator.serviceWorker.ready;
+      console.log('[Push] Service worker registered');
+    }
+
+    // Initialize Firebase Messaging
+    await initializeMessaging();
 
     // Get FCM token
     const fcmToken = await getFCMToken();
     
-    if (fcmToken) {
-      // Save FCM token to server
-      await fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          token: fcmToken,
-          userAgent: navigator.userAgent
-        })
-      });
-      console.log('FCM token saved for user:', userId);
+    if (!fcmToken) {
+      console.warn('[Push] Failed to get FCM token');
+      return false;
     }
+
+    // Save FCM token to server
+    const response = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        token: fcmToken,
+        userAgent: navigator.userAgent
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('[Push] Failed to save token:', error);
+      return false;
+    }
+
+    console.log('[Push] Successfully subscribed to push notifications');
+    return true;
   } catch (error) {
-    console.error('Error subscribing to FCM push notifications:', error);
+    console.error('[Push] Error subscribing to notifications:', error);
+    return false;
   }
 }
 
@@ -92,15 +122,19 @@ export function NotificationPermissionPrompt() {
       
       if (result === "granted" && user) {
         // Subscribe user to push notifications for background delivery
-        await subscribeToPushNotifications(user.uid);
+        const success = await subscribeToPushNotifications(user.uid);
         
-        // Show a test notification
-        new Notification("KKNotes Notifications Enabled! 🎉", {
-          body: "You'll now receive updates about your submissions and content.",
-          icon: "/favicon.ico",
-          badge: "/favicon.ico",
-          tag: "welcome",
-        });
+        if (success) {
+          // Show a test notification
+          new Notification("KKNotes Notifications Enabled! 🎉", {
+            body: "You'll now receive updates about your submissions and content.",
+            icon: "/icon-192x192.png",
+            badge: "/badge-72x72.png",
+            tag: "welcome",
+          });
+        } else {
+          console.warn('[Push] Subscription partially successful - notifications may not work in background');
+        }
       }
       
       setShowPrompt(false);
