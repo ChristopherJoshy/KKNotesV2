@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, Check, CheckCheck, Trash2, FileText, Video, AlertCircle, Star, Clock, Sparkles, X, UserPlus, UserMinus, Shield, Upload } from "lucide-react";
+import { Bell, Check, CheckCheck, Trash2, FileText, Video, AlertCircle, Star, Clock, Sparkles, X, UserPlus, UserMinus, Shield, Upload, Minus, FolderPlus, FolderMinus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -68,6 +68,31 @@ const notificationStyles: Record<AppNotification['type'], { icon: any; gradient:
     icon: Upload, 
     gradient: "from-sky-400 to-blue-500",
     bgColor: "bg-sky-100 dark:bg-sky-900/30"
+  },
+  admin_content_deleted: { 
+    icon: Minus, 
+    gradient: "from-red-400 to-rose-500",
+    bgColor: "bg-red-100 dark:bg-red-900/30"
+  },
+  admin_scheme_created: { 
+    icon: Layers, 
+    gradient: "from-indigo-400 to-purple-500",
+    bgColor: "bg-indigo-100 dark:bg-indigo-900/30"
+  },
+  admin_subject_added: { 
+    icon: FolderPlus, 
+    gradient: "from-green-400 to-teal-500",
+    bgColor: "bg-green-100 dark:bg-green-900/30"
+  },
+  admin_subject_deleted: { 
+    icon: FolderMinus, 
+    gradient: "from-orange-400 to-red-500",
+    bgColor: "bg-orange-100 dark:bg-orange-900/30"
+  },
+  content_deleted: { 
+    icon: Trash2, 
+    gradient: "from-gray-400 to-slate-500",
+    bgColor: "bg-gray-100 dark:bg-gray-900/30"
   },
 };
 
