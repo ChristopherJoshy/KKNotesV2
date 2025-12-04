@@ -337,7 +337,7 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
                 onValueChange={(v) => setForm(prev => ({ ...prev, subjectId: v }))}
                 disabled={!form.semester || loadingSubjects}
               >
-                <SelectTrigger className="mt-1.5">
+                <SelectTrigger className="mt-1.5 min-h-[44px]">
                   <SelectValue placeholder={
                     !form.semester 
                       ? "Select semester first" 
@@ -348,9 +348,19 @@ export function SubmitContent({ trigger }: SubmitContentProps) {
                           : "Select subject"
                   } />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent 
+                  className="max-h-[300px] overflow-y-auto z-[9999]"
+                  position="popper"
+                  sideOffset={4}
+                >
                   {Object.entries(subjects).map(([id, subject]) => (
-                    <SelectItem key={id} value={id}>{(subject as any).name}</SelectItem>
+                    <SelectItem 
+                      key={id} 
+                      value={id}
+                      className="min-h-[44px] py-3"
+                    >
+                      {(subject as any).name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>

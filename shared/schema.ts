@@ -71,6 +71,11 @@ export const notificationSchema = z.object({
     "report_reviewed",         // When another admin reviews a report
     "content_approved",        // When an admin approves content (notify other admins)
     "admin_content_added",     // When an admin directly adds content
+    "admin_content_deleted",   // When an admin deletes content
+    "admin_scheme_created",    // When an admin creates a new scheme
+    "admin_subject_added",     // When an admin adds a subject
+    "admin_subject_deleted",   // When an admin deletes a subject
+    "content_deleted",         // When user's content is deleted by admin
   ]),
   title: z.string(),
   message: z.string(),

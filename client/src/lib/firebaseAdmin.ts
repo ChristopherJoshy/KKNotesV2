@@ -759,18 +759,11 @@ export class FirebaseService {
         });
       }
       
-      // Notify other admins about the approval
+      // Notify other admins about the approval (not the approver)
       await this.notifyAdminsOfContentApproval({
         submission,
         approvedBy,
         approvedByName,
-      });
-      
-      // Broadcast push notification to all users about new content
-      await this.notifyAllUsersOfContentUpdate('approved', {
-        title: submission.title,
-        contentType: submission.contentType,
-        adminName: approvedByName || 'Admin',
       });
       
       // Remove the pending submission
@@ -1135,72 +1128,70 @@ export class FirebaseService {
   }
 
   /**
-   * Notify all users about new content (admin action)
+   * Notify all admins about admin panel activity (content added, etc.)
    */
-  async notifyAllUsersOfNewContent(content: {
+  async notifyAdminsOfActivity(activity: {
+    type: AppNotification['type'];
     title: string;
-    contentType: 'notes' | 'videos';
-    semester: string;
-    subjectId: string;
-    subjectName?: string;
-    adminName?: string;
+    message: string;
+    contentId?: string;
+    contentType?: 'notes' | 'videos';
+    performedBy?: string;
+    performedByName?: string;
+    excludeUserId?: string;
   }): Promise<void> {
     try {
-      // Create in-app notifications for all users
+      const admins = await this.getAdmins();
       const allUsers = await this.getAllUsers();
       
-      const notificationPromises = allUsers.map(user => 
-        this.createNotification({
-          userId: user.uid,
-          type: 'admin_content_added',
-          title: 'New Content Available!',
-          message: `${content.adminName || 'Admin'} added new ${content.contentType === 'notes' ? 'notes' : 'video'}: "${content.title}" for ${content.subjectName || content.subjectId}`,
-          contentType: content.contentType,
-        })
-      );
-
-      await Promise.allSettled(notificationPromises);
-
-      // Also send push notification to all subscribed browsers
-      await this.broadcastPushNotification({
-        type: 'admin_content_added',
-        title: 'New Content Available! 📚',
-        message: `${content.adminName || 'Admin'} added "${content.title}" for ${content.subjectName || content.subjectId}`,
-        url: '/',
-        contentType: content.contentType,
-      });
-
-      console.log('Notified all users of new content');
+      for (const admin of admins) {
+        const adminUser = allUsers.find(u => u.email.toLowerCase() === admin.email.toLowerCase());
+        // Don't notify the admin who performed the action
+        if (adminUser && adminUser.uid !== activity.excludeUserId) {
+          await this.createNotification({
+            userId: adminUser.uid,
+            type: activity.type as AppNotification['type'],
+            title: activity.title,
+            message: activity.message,
+            contentId: activity.contentId,
+            contentType: activity.contentType,
+            fromUser: activity.performedBy,
+            fromUserName: activity.performedByName,
+          });
+        }
+      }
+      console.log('Notified admins of activity:', activity.type);
     } catch (error) {
-      console.error('Error notifying users of new content:', error);
+      console.error('Error notifying admins of activity:', error);
     }
   }
 
   /**
-   * Notify all users about content update
+   * Notify a specific user about an action on their content
    */
-  async notifyAllUsersOfContentUpdate(action: 'approved' | 'deleted' | 'updated', content: {
+  async notifyUserOfContentAction(userId: string, action: {
+    type: AppNotification['type'];
     title: string;
-    contentType: 'notes' | 'videos';
-    adminName?: string;
+    message: string;
+    contentId?: string;
+    contentType?: 'notes' | 'videos';
+    fromUser?: string;
+    fromUserName?: string;
   }): Promise<void> {
     try {
-      const actionMessages = {
-        approved: `New ${content.contentType === 'notes' ? 'notes' : 'video'} approved: "${content.title}"`,
-        deleted: `Content removed: "${content.title}"`,
-        updated: `Content updated: "${content.title}"`,
-      };
-
-      // Send push notification
-      await this.broadcastPushNotification({
-        type: action === 'approved' ? 'content_approved' : 'admin_content_added',
-        title: action === 'approved' ? '✅ New Content!' : '📢 Content Update',
-        message: actionMessages[action],
-        url: '/',
-        contentType: content.contentType,
+      await this.createNotification({
+        userId,
+        type: action.type as AppNotification['type'],
+        title: action.title,
+        message: action.message,
+        contentId: action.contentId,
+        contentType: action.contentType,
+        fromUser: action.fromUser,
+        fromUserName: action.fromUserName,
       });
+      console.log('Notified user:', userId, 'of action:', action.type);
     } catch (error) {
-      console.error('Error notifying users of content update:', error);
+      console.error('Error notifying user of content action:', error);
     }
   }
 

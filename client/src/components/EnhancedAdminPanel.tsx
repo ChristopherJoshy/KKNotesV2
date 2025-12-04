@@ -139,6 +139,17 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
         description: newSchemeDescription || `KTU ${year} Curriculum`,
         isDefault: false,
       });
+      
+      // Notify other admins
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_scheme_created',
+        title: 'New Scheme Created',
+        message: `${user?.name || user?.email || 'Admin'} created ${year} Scheme`,
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
       toast({ title: "Scheme Created", description: `${year} Scheme has been created successfully.` });
       setNewSchemeYear("");
       setNewSchemeDescription("");
@@ -188,6 +199,17 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
         id: newSubjectId.trim(),
         name: newSubjectName.trim(),
       }, selectedScheme);
+      
+      // Notify other admins
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_subject_added',
+        title: 'New Subject Added',
+        message: `${user?.name || user?.email || 'Admin'} added "${newSubjectName}" to ${selectedScheme} Scheme (${newSubjectSemester.toUpperCase()})`,
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
       toast({ title: "Subject Added", description: `${newSubjectName} has been added to ${selectedScheme} scheme.` });
       setNewSubjectName("");
       setNewSubjectId("");
@@ -203,9 +225,21 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
 
   // Delete subject
   const handleDeleteSubject = async (subjectId: string) => {
+    const subjectName = schemeSubjects[subjectId]?.name || subjectId;
     setDeletingSubjectId(subjectId);
     try {
       await firebaseService.deleteSubject(schemeSubjectsSemester, subjectId, selectedScheme);
+      
+      // Notify other admins
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_subject_deleted',
+        title: 'Subject Deleted',
+        message: `${user?.name || user?.email || 'Admin'} deleted "${subjectName}" from ${selectedScheme} Scheme`,
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
       toast({ title: "Subject Deleted", description: "Subject and all its content have been removed." });
       await loadSchemeSubjects(schemeSubjectsSemester, selectedScheme);
     } catch (error: any) {
@@ -410,6 +444,30 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
       } else {
         await firebaseService.deleteVideo(item.id, item.semester, item.subjectId);
       }
+      
+      // Notify other admins about content deletion
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_content_deleted',
+        title: 'Content Deleted',
+        message: `${user?.name || user?.email || 'Admin'} deleted ${item.category === 'notes' ? 'notes' : 'video'}: "${item.title}"`,
+        contentType: item.category as 'notes' | 'videos',
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
+      // Notify the content uploader if they exist and are different from admin
+      if (item.uploadedBy && item.uploadedBy !== user?.uid) {
+        await firebaseService.notifyUserOfContentAction(item.uploadedBy, {
+          type: 'content_deleted',
+          title: 'Your Content Was Removed',
+          message: `Your ${item.category === 'notes' ? 'notes' : 'video'} "${item.title}" was removed by an admin.`,
+          contentType: item.category as 'notes' | 'videos',
+          fromUser: user?.uid,
+          fromUserName: user?.name || user?.email,
+        });
+      }
+      
       toast({ title: 'Deleted', description: `${item.title} removed.` });
       await loadAllContent();
     } catch (e) {
@@ -539,14 +597,15 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
       // Get subject name for notification
       const subjectName = subjects[uploadForm.subjectId]?.name || uploadForm.subjectId;
       
-      // Notify all users about the new content via push notification
-      await firebaseService.notifyAllUsersOfNewContent({
-        title: uploadForm.title,
+      // Notify other admins about the new content upload (not all users)
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_content_added',
+        title: 'New Content Added',
+        message: `${user?.name || user?.email || 'Admin'} added ${uploadForm.category === "notes" ? "notes" : "video"}: "${uploadForm.title}" for ${subjectName}`,
         contentType: uploadForm.category === "notes" ? "notes" : "videos",
-        semester: uploadForm.semester,
-        subjectId: uploadForm.subjectId,
-        subjectName,
-        adminName: user?.name || user?.email || "Admin",
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid, // Don't notify the admin who uploaded
       });
       
       toast({
@@ -620,6 +679,17 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
         addedBy: user?.uid || undefined,
         addedByName: user?.name || user?.email || undefined 
       });
+      
+      // Notify other admins
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_added',
+        title: 'New Admin Added',
+        message: `${user?.name || user?.email || 'Admin'} added ${email} as an admin`,
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
       toast({ title: 'Admin added', description: email });
       setNewAdminEmail("");
       await loadAdmins();
@@ -631,9 +701,21 @@ export function EnhancedAdminPanel({ onClose }: EnhancedAdminPanelProps) {
   };
 
   const handleRemoveAdmin = async (adminKey: string) => {
+    const adminToRemove = admins.find(a => a.key === adminKey);
     setRemovingAdminKey(adminKey);
     try {
       await firebaseService.removeAdminByKey(adminKey, user?.uid, user?.name || user?.email);
+      
+      // Notify other admins
+      await firebaseService.notifyAdminsOfActivity({
+        type: 'admin_removed',
+        title: 'Admin Removed',
+        message: `${user?.name || user?.email || 'Admin'} removed ${adminToRemove?.email || 'an admin'} from the admin list`,
+        performedBy: user?.uid,
+        performedByName: user?.name || user?.email,
+        excludeUserId: user?.uid,
+      });
+      
       toast({ title: 'Admin removed' });
       await loadAdmins();
     } catch (e: any) {
